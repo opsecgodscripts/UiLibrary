@@ -14,7 +14,9 @@
 	See test.lua for every element.
 
 	API
-	  Library:CreateWindow({ Title, Subtitle, ToggleKey, Size, Theme })  -> Window
+	  Library:CreateWindow({ Title, Subtitle, ToggleKey, Size, Theme, Font, Logo })  -> Window
+	    Logo:      link to a PNG / JPG / WebP image, drawn 20 x 20 in the top-left
+	    Font:      "UI" (default), "Plex", "System" or "Monospace"
 	    ToggleKey: "RightShift", "Insert", "F1", "K" ... or a virtual-key number (0xA1)
 	               or an Enum.KeyCode if the executor has Enum.
 	    Size:      Vector2/UDim2 (default 450 x 557) or just a width. The window grows
@@ -384,6 +386,43 @@ local function viewportSize()
 	return 1920, 1080
 end
 
+--// images -------------------------------------------------------------------
+-- Drawing images take the raw bytes of a PNG, JPG or WebP file
+local function isImageData(data)
+	if type(data) ~= "string" or #data < 12 then
+		return false
+	end
+	if data:sub(1, 8) == "\137PNG\r\n\26\n" then
+		return true
+	end
+	if data:byte(1) == 255 and data:byte(2) == 216 and data:byte(3) == 255 then
+		return true
+	end
+	return data:sub(1, 4) == "RIFF" and data:sub(9, 12) == "WEBP"
+end
+
+-- source: a URL to a PNG/JPG/WebP, or the raw image bytes
+local function loadImage(source, done)
+	if isImageData(source) then
+		done(source)
+		return
+	end
+	if type(source) ~= "string" or not source:match("^https?://") then
+		log("Logo must be a link to a PNG, JPG or WebP file")
+		return
+	end
+	spawnTask(function()
+		local ok, data = pcall(function()
+			return game:HttpGet(source)
+		end)
+		if ok and isImageData(data) then
+			done(data)
+		else
+			log("couldn't load image from", source)
+		end
+	end)
+end
+
 --// layout constants ---------------------------------------------------------
 -- sizes match the reference layout (450 x 557 window)
 local TOPBAR = 38
@@ -481,8 +520,8 @@ function Library:CreateWindow(config)
 		_statusGood = false,
 		_notifications = {},
 
-		_pool = { Square = {}, Text = {}, Circle = {}, Line = {} },
-		_used = { Square = 0, Text = 0, Circle = 0, Line = 0 },
+		_pool = { Square = {}, Text = {}, Circle = {}, Line = {}, Image = {} },
+		_used = { Square = 0, Text = 0, Circle = 0, Line = 0, Image = 0 },
 		_cornerOk = true,
 
 		_mouseX = 0,
@@ -498,11 +537,20 @@ function Library:CreateWindow(config)
 		_activeSlider = nil,
 		_openDropdown = nil,
 		_focusedBox = nil,
+		_logoData = nil,
+		_logoSupported = true,
+		_imageData = setmetatable({}, { __mode = "k" }),
 		_keyPrev = {},
 		_backHeld = 0,
 		_overlay = nil,
 		_lastError = nil,
 	}, Window)
+
+	if config.Logo then
+		loadImage(config.Logo, function(data)
+			self._logoData = data
+		end)
+	end
 
 	env.__UiLibraryWindow = self
 	_G.__UiLibraryWindow = self
@@ -602,6 +650,21 @@ function Window:_line(x1, y1, x2, y2, color, thickness, z, alpha)
 	o.Thickness = thickness or 1
 	o.Transparency = alpha or 1
 	o.ZIndex = z or 5
+end
+
+function Window:_image(data, x, y, w, h, z, rounding)
+	local o = self:_get("Image")
+	if self._imageData[o] ~= data then
+		o.Data = data
+		self._imageData[o] = data
+	end
+	o.Position = Vector2.new(math.floor(x), math.floor(y))
+	o.Size = Vector2.new(w, h)
+	o.Transparency = 1
+	o.ZIndex = z or 5
+	pcall(function()
+		o.Rounding = rounding or 0
+	end)
 end
 
 function Window:_circle(x, y, radius, color, z, alpha)
@@ -817,7 +880,19 @@ function Window:_drawWindow()
 	self:_rect(x, y + TOPBAR - 4, W, 4, th.Topbar, 2)
 
 	-- brand: logo, title, subtitle on one line
-	self:_drawLogo(x + 12, y + 12)
+	local drewImage = false
+	if self._logoData and self._logoSupported then
+		local ok = pcall(self._image, self, self._logoData, x + 9, y + 9, 20, 20, 5, 4)
+		if ok then
+			drewImage = true
+		else
+			self._logoSupported = false
+			log("this executor can't draw images, using the default logo")
+		end
+	end
+	if not drewImage then
+		self:_drawLogo(x + 12, y + 12)
+	end
 	local titleX = x + 34
 	local title = fitText(self.Title, W * 0.3, TEXT)
 	self:_text(title, titleX, y + 12, th.Text, TEXT, 5)
@@ -1070,7 +1145,7 @@ function Window:Destroy()
 			end)
 		end
 	end
-	self._pool = { Square = {}, Text = {}, Circle = {}, Line = {} }
+	self._pool = { Square = {}, Text = {}, Circle = {}, Line = {}, Image = {} }
 	local env = (type(getgenv) == "function" and getgenv()) or _G
 	if env.__UiLibraryWindow == self then
 		env.__UiLibraryWindow = nil

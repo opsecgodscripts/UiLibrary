@@ -48,8 +48,9 @@ end)
 
 --// Window ------------------------------------------------------------------
 local Window = Library:CreateWindow({
-	Title = "Niph",
+	Title = "Tungity",
 	Subtitle = "Demo",
+	Logo = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/assets/logo.png",
 	ToggleKey = "RightShift", -- or "Insert", "F1", "K", or a virtual-key number like 0xA1
 	Font = "UI",             -- "UI", "Plex", "System" or "Monospace"
 })
