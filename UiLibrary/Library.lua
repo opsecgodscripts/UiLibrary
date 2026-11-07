@@ -3958,7 +3958,7 @@ function Window:OpenAnimationTracker()
 	local targetSec = tab:CreateSection({ Name = "Target" })
 	local animSec = tab:CreateSection({ Name = "Animations" })
 
-	local state = { targets = {}, history = {}, printing = false, esp = true }
+	local state = { targets = {}, history = {}, printing = false, esp = true, smoothing = 0.05 }
 	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
 
 	local function playerNames()
@@ -4108,6 +4108,18 @@ function Window:OpenAnimationTracker()
 		Default = true,
 		Callback = function(on)
 			state.esp = on
+		end,
+	})
+
+	targetSec:AddSlider({
+		Name = "ESP Smoothing",
+		Min = 0,
+		Max = 150,
+		Default = 50,
+		Increment = 5,
+		Suffix = "ms",
+		Callback = function(ms)
+			state.smoothing = ms / 1000
 		end,
 	})
 
@@ -4271,7 +4283,29 @@ function Window:OpenAnimationTracker()
 				tgt.partModel = tgt.model
 				tgt.part = rootPart(tgt.model)
 			end
-			local pos = prop(tgt.part, "Position")
+			local raw = prop(tgt.part, "Position")
+			local pos
+			if raw then
+				-- smooth the target's position (not the camera): the stored position can step
+				-- between network updates while the game draws the character smoothly
+				local tau = state.smoothing
+				local sp = tgt.smooth
+				local dt = t - (tgt.smoothAt or t)
+				tgt.smoothAt = t
+				if tau <= 0 or not sp or tgt.smoothModel ~= tgt.model then
+					sp = { X = raw.X, Y = raw.Y, Z = raw.Z }
+				else
+					local dx, dy, dz = raw.X - sp.X, raw.Y - sp.Y, raw.Z - sp.Z
+					if dx * dx + dy * dy + dz * dz > 400 then
+						sp = { X = raw.X, Y = raw.Y, Z = raw.Z } -- teleport / respawn: snap
+					else
+						local a = 1 - math.exp(-math.max(dt, 0) / tau)
+						sp = { X = sp.X + dx * a, Y = sp.Y + dy * a, Z = sp.Z + dz * a }
+					end
+				end
+				tgt.smooth, tgt.smoothModel = sp, tgt.model
+				pos = sp
+			end
 			if pos then
 				local hx, hy = Cam.project(pos.X, pos.Y + 3.4, pos.Z)
 				local fx, fy = Cam.project(pos.X, pos.Y - 3.6, pos.Z)
