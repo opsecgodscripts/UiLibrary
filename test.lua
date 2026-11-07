@@ -52,6 +52,7 @@ local Window = Library:CreateWindow({
 	Subtitle = "Demo",
 	Logo = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/assets/logo.png",
 	ToggleKey = "RightShift", -- or "Insert", "F1", "K", or a virtual-key number like 0xA1
+	Theme = "Default",        -- or "Tung"
 	Font = "UI",             -- "UI", "Plex", "System" or "Monospace"
 })
 
@@ -87,10 +88,12 @@ General:AddToggle({
 	end,
 })
 
+-- Toggle with a keybind: press P (even with the UI hidden) to flip it
 General:AddToggle({
 	Name = "Print Changes",
 	Default = false,
 	Flag = "PrintChanges",
+	Keybind = "P",
 	Callback = function(enabled)
 		print("Print changes:", enabled)
 	end,
@@ -119,6 +122,26 @@ General:AddButton({
 		if Window.Flags.NotifyOnClick then
 			Window:Notify("Flags", "Printed every flag to the console", 3)
 		end
+	end,
+})
+
+-- Standalone keybinds
+General:AddKeybind({
+	Name = "Notify Key",
+	Default = "N",
+	Mode = "Press",
+	Flag = "NotifyKey",
+	Callback = function()
+		Window:Notify("Keybind", "You pressed the notify key", 2)
+	end,
+})
+
+General:AddKeybind({
+	Name = "Hold Key",
+	Default = "None", -- unbound until you click the box and press a key
+	Mode = "Hold",
+	Callback = function(held)
+		Window:SetStatus(held and "Holding..." or ("Connected as " .. playerName), true)
 	end,
 })
 
@@ -226,7 +249,16 @@ Look:AddDropdown({
 	end,
 })
 
-Look:AddLabel("The accent color updates instantly.")
+Look:AddDropdown({
+	Name = "Theme",
+	Options = { "Default", "Tung" },
+	Default = "Default",
+	Callback = function(value)
+		Window:SetTheme(value)
+	end,
+})
+
+Look:AddLabel("Themes and colors update instantly.")
 
 local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Right", Icon = "*" })
 local counterLabel = Info:AddLabel("Button pressed 0 times")
@@ -244,7 +276,14 @@ counterButton = Info:AddButton({
 --// Settings tab -------------------------------------------------------------
 local Interface = SettingsTab:CreateSection({ Name = "Interface", Side = "Left", Icon = "#" })
 
-Interface:AddLabel("Press RightShift to show or hide this window. Drag it by the top bar.")
+-- Menu = true: this keybind shows / hides the window
+Interface:AddKeybind({
+	Name = "Menu Key",
+	Default = "RightShift",
+	Menu = true,
+})
+
+Interface:AddLabel("Click a key box, then press a key to rebind. Escape cancels, Backspace clears. Drag the window by the top bar.")
 
 Interface:AddButton({
 	Name = "Hide UI",

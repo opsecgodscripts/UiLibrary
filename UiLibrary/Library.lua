@@ -17,6 +17,7 @@
 	  Library:CreateWindow({ Title, Subtitle, ToggleKey, Size, Theme, Font, Logo })  -> Window
 	    Logo:      link to a PNG / JPG / WebP image, drawn 20 x 20 in the top-left
 	    Font:      "UI" (default), "Plex", "System" or "Monospace"
+	    Theme:     "Default", "Tung", or a table of colors
 	    ToggleKey: "RightShift", "Insert", "F1", "K" ... or a virtual-key number (0xA1)
 	               or an Enum.KeyCode if the executor has Enum.
 	    Size:      Vector2/UDim2 (default 450 x 557) or just a width. The window grows
@@ -44,6 +45,14 @@
 	                                                                    -> :Set(text) :Get()
 	    Callback(text, submitted) fires on Enter or clicking away (every keystroke if Live = true).
 	    Escape cancels the edit. Needs iskeypressed (Matcha has it).
+	  Section:AddKeybind({ Name, Default, Mode = "Press" | "Toggle" | "Hold", Menu, Flag, Callback, ChangedCallback })
+	                                                                    -> :Set(key) :Get() :GetState()
+	    Click the key box, then press a key. Escape cancels, Backspace clears.
+	    Menu = true makes it the show / hide key for the window.
+	  Section:AddToggle({ ..., Keybind = "F", KeybindMode = "Toggle" | "Hold" })
+	    adds a key box next to the checkbox; the key flips the toggle even when the UI is hidden.
+
+	  Window:SetTheme("Tung" | "Default" | table)    Window:SetToggleKey(key)
 
 	Callbacks only fire when the user changes a value or you call :Set(), not when
 	the element is created.
@@ -147,6 +156,45 @@ local DefaultTheme = {
 	Bad = Color3.fromRGB(222, 64, 74),
 }
 
+-- built-in themes: pass Theme = "Tung" (or a table of colors) to CreateWindow,
+-- or call Window:SetTheme("Tung") at any time
+Library.Themes = {
+	Default = DefaultTheme,
+	Tung = {
+		Background = Color3.fromRGB(18, 12, 8),
+		Topbar = Color3.fromRGB(36, 24, 15),
+		TabActive = Color3.fromRGB(12, 8, 5),
+		Footer = Color3.fromRGB(38, 25, 16),
+		Section = Color3.fromRGB(27, 18, 12),
+		Element = Color3.fromRGB(46, 31, 20),
+		ElementHover = Color3.fromRGB(60, 40, 26),
+		Border = Color3.fromRGB(54, 37, 24),
+		Accent = Color3.fromRGB(206, 122, 52),
+		AccentSoft = Color3.fromRGB(140, 76, 30),
+		Text = Color3.fromRGB(246, 232, 212),
+		TextDim = Color3.fromRGB(172, 146, 118),
+		TextMuted = Color3.fromRGB(120, 98, 76),
+		Good = Color3.fromRGB(120, 196, 90),
+		Bad = Color3.fromRGB(222, 76, 60),
+	},
+}
+
+local function buildTheme(theme)
+	local out = {}
+	for k, v in pairs(DefaultTheme) do
+		out[k] = v
+	end
+	if type(theme) == "string" then
+		theme = Library.Themes[theme]
+	end
+	if type(theme) == "table" then
+		for k, v in pairs(theme) do
+			out[k] = v
+		end
+	end
+	return out
+end
+
 --// text measuring -----------------------------------------------------------
 local function charCount(text)
 	if utf8 and utf8.len then
@@ -180,8 +228,11 @@ local function textWidth(text, size)
 	return charCount(text) * size * charWidth()
 end
 
+local FIT_MARGIN = 1.12 -- estimates can be a bit short for wide letters, so fit with some slack
+
 local function fitText(text, maxWidth, size)
 	text = tostring(text or "")
+	maxWidth = maxWidth / FIT_MARGIN
 	if textWidth(text, size) <= maxWidth then
 		return text
 	end
@@ -232,12 +283,39 @@ local VirtualKeys = {
 	Five = 0x35, Six = 0x36, Seven = 0x37, Eight = 0x38, Nine = 0x39,
 }
 
+local KeyNames = {
+	[0xA1] = "RShift", [0xA0] = "LShift", [0x10] = "Shift",
+	[0xA3] = "RCtrl", [0xA2] = "LCtrl", [0x11] = "Ctrl",
+	[0xA5] = "RAlt", [0xA4] = "LAlt", [0x12] = "Alt",
+	[0x2D] = "Insert", [0x2E] = "Delete", [0x24] = "Home", [0x23] = "End",
+	[0x21] = "PgUp", [0x22] = "PgDn", [0x09] = "Tab", [0x20] = "Space",
+	[0x1B] = "Esc", [0x0D] = "Enter", [0x08] = "Back", [0x14] = "Caps",
+	[0x26] = "Up", [0x28] = "Down", [0x25] = "Left", [0x27] = "Right",
+	[0x04] = "MB3", [0x05] = "MB4", [0x06] = "MB5",
+	[0xBA] = ";", [0xBB] = "=", [0xBC] = ",", [0xBD] = "-", [0xBE] = ".", [0xBF] = "/",
+	[0xC0] = "`", [0xDB] = "[", [0xDC] = "\\", [0xDD] = "]", [0xDE] = "'",
+}
+for c = 0x41, 0x5A do
+	KeyNames[c] = string.char(c)
+end
+for d = 0, 9 do
+	KeyNames[0x30 + d] = tostring(d)
+	KeyNames[0x60 + d] = "Num" .. d
+end
+for f = 1, 24 do
+	KeyNames[0x6F + f] = "F" .. f
+end
+
+local function keyName(vk)
+	return KeyNames[vk] or string.format("0x%X", vk)
+end
+
 local function resolveKey(key)
 	if key == nil then
 		key = "RightShift"
 	end
 	if type(key) == "number" then
-		return { vk = key, name = string.format("0x%X", key) }
+		return { vk = key, name = keyName(key) }
 	end
 
 	local name
@@ -267,7 +345,15 @@ local function resolveKey(key)
 		enum = Enum.KeyCode[name]
 	end)
 
-	return { vk = vk, enum = enum, name = name }
+	return { vk = vk, enum = enum, name = vk and keyName(vk) or name }
+end
+
+-- nil / false / "None" mean no key
+local function resolveOptionalKey(key)
+	if key == nil or key == false or key == "" or key == "None" then
+		return nil
+	end
+	return resolveKey(key)
 end
 
 --// typing -------------------------------------------------------------------
@@ -443,6 +529,8 @@ Window.__index = Window
 local Tab = {}
 Tab.__index = Tab
 
+local newKeybind -- defined with the keybind element below
+
 local Section = {}
 Section.__index = Section
 
@@ -483,15 +571,7 @@ function Library:CreateWindow(config)
 		end
 	end
 
-	local theme = {}
-	for k, v in pairs(DefaultTheme) do
-		theme[k] = v
-	end
-	if type(config.Theme) == "table" then
-		for k, v in pairs(config.Theme) do
-			theme[k] = v
-		end
-	end
+	local theme = buildTheme(config.Theme)
 
 	if config.Font ~= nil then
 		FONT = FontIds[config.Font] or (type(config.Font) == "number" and config.Font) or FONT
@@ -508,7 +588,7 @@ function Library:CreateWindow(config)
 		Visible = true,
 		Running = true,
 
-		_toggleKey = resolveKey(config.ToggleKey),
+		_toggleKey = resolveOptionalKey(config.ToggleKey == nil and "RightShift" or config.ToggleKey),
 		_width = width,
 		_height = minHeight,
 		_minHeight = minHeight,
@@ -537,6 +617,9 @@ function Library:CreateWindow(config)
 		_activeSlider = nil,
 		_openDropdown = nil,
 		_focusedBox = nil,
+		_keybinds = {},
+		_listening = nil,
+		_listenPrev = {},
 		_logoData = nil,
 		_logoSupported = true,
 		_imageData = setmetatable({}, { __mode = "k" }),
@@ -722,11 +805,18 @@ function Window:_frame()
 	self._down = down
 	self._prevDown = down
 
-	local keyDown = Input.keyDown(self._toggleKey)
-	if keyDown and not self._prevKey and not self._focusedBox then
+	local busy = self._focusedBox ~= nil or self._listening ~= nil
+	local keyDown = self._toggleKey and Input.keyDown(self._toggleKey) or false
+	if keyDown and not self._prevKey and not busy then
 		self:Toggle()
 	end
 	self._prevKey = keyDown
+
+	if self._listening then
+		self:_listen()
+	elseif not self._focusedBox then
+		self:_runKeybinds()
+	end
 
 	if self._focusedBox then
 		-- a click anywhere except the focused box submits it (the click still goes through)
@@ -754,6 +844,72 @@ function Window:_frame()
 	self:_drawNotifications(t)
 
 	self:_hideUnused()
+end
+
+--// keybinds -------------------------------------------------------------------
+function Window:_startListening(keybind)
+	if self._focusedBox then
+		self._focusedBox:_unfocus(true)
+	end
+	self._listening = keybind
+	self._openDropdown = nil
+	-- keys already held right now don't count
+	for code = 3, 254 do
+		self._listenPrev[code] = Input.vk(code)
+	end
+end
+
+function Window:_listen()
+	local keybind = self._listening
+	-- clicking anywhere except its key box cancels
+	if self._clicked then
+		local r = keybind._rect
+		if not r or not self:_over(r.x, r.y, r.w, r.h) then
+			self._listening = nil
+			return
+		end
+	end
+	for code = 3, 254 do
+		local down = Input.vk(code)
+		local was = self._listenPrev[code]
+		self._listenPrev[code] = down
+		if down and not was then
+			self._listening = nil
+			if code == 0x1B then
+				return -- Escape: keep the old key
+			elseif code == 0x08 or code == 0x2E then
+				if not keybind.Menu then -- the menu key can't be cleared, or the UI couldn't be reopened
+					keybind:Set(nil) -- Backspace / Delete: clear
+				end
+			else
+				keybind:Set(code)
+			end
+			-- don't fire the new bind for the press that set it
+			keybind._prev = true
+			if keybind.Menu then
+				self._prevKey = true
+			end
+			return
+		end
+	end
+end
+
+function Window:_runKeybinds()
+	for _, keybind in ipairs(self._keybinds) do
+		if keybind.Key and not keybind.Menu then
+			local down = Input.keyDown(keybind.Key)
+			local was = keybind._prev
+			keybind._prev = down
+			if down ~= was then
+				keybind:_fire(down)
+			end
+		end
+	end
+end
+
+function Window:SetToggleKey(key)
+	self._toggleKey = resolveOptionalKey(key)
+	self._prevKey = true
 end
 
 --// typing into the focused textbox -------------------------------------------
@@ -1109,6 +1265,16 @@ function Window:Toggle(visible)
 	end
 end
 
+function Window:SetTheme(theme)
+	local new = buildTheme(theme)
+	for k in pairs(self.Theme) do
+		self.Theme[k] = nil
+	end
+	for k, v in pairs(new) do
+		self.Theme[k] = v
+	end
+end
+
 function Window:SetStatus(text, connected)
 	self._status = tostring(text or "")
 	self._statusGood = connected == true
@@ -1302,26 +1468,47 @@ function Section:AddToggle(config)
 		Flag = config.Flag,
 		Callback = config.Callback,
 	}, Toggle))
-	toggle._anim = toggle.Value and 1 or 0
 	self:_setFlag(toggle.Flag, toggle.Value)
+	if config.Keybind ~= nil then
+		-- Keybind = "F" (or "None" to start unbound): pressing it flips the toggle
+		local mode = config.KeybindMode or "Toggle"
+		toggle.Keybind = newKeybind(self.Window, {
+			Default = config.Keybind,
+			Mode = "Hold",
+			Flag = config.KeybindFlag,
+			Callback = function(down)
+				if mode == "Hold" then
+					toggle:Set(down)
+				elseif down then
+					toggle:Set(not toggle.Value)
+				end
+			end,
+		})
+	end
 	return toggle
 end
 
 function Toggle:_height()
-	return 15
+	return 16
 end
 
 function Toggle:_draw(win, x, y, w, h)
 	local th = win.Theme
+	local size = 12
+	local keyW = 0
+	if self.Keybind then
+		-- key box sits left of the checkbox and is drawn first so it gets its own clicks
+		keyW = self.Keybind:_drawBox(win, x + w - size - 6, y, h) + 6
+	end
+
 	local hover = win:_over(x, y, w, h)
 	if win:_clickIn(x, y, w, h) then
 		self:Set(not self.Value)
 	end
 
 	local color = self.Value and th.Text or (hover and th.Text or th.TextDim)
-	win:_text(fitText(self.Text, w - 24, TEXT), x, y + (h - TEXT) / 2 - 1, color, TEXT, 12)
+	win:_text(fitText(self.Text, w - 24 - keyW, TEXT), x, y + (h - TEXT) / 2 - 1, color, TEXT, 12)
 
-	local size = 12
 	local bx, by = x + w - size, y + (h - size) / 2
 	if self.Value then
 		-- glow, accent border, filled box, check mark
@@ -1453,6 +1640,136 @@ function Slider:Get()
 	return self.Value
 end
 
+--// keybind ------------------------------------------------------------------
+-- Modes: "Press" (Callback() on each press), "Toggle" (Callback(on) flips each press),
+-- "Hold" (Callback(true) on press, Callback(false) on release).
+-- Menu = true makes it the window's show / hide key.
+local Keybind = {}
+Keybind.__index = Keybind
+
+function newKeybind(window, config) -- assigns the forward-declared local
+	local keybind = setmetatable({
+		Window = window,
+		Key = resolveOptionalKey(config.Default),
+		Mode = config.Mode or "Press",
+		Menu = config.Menu == true,
+		State = false,
+		Callback = config.Callback,
+		ChangedCallback = config.ChangedCallback,
+		Flag = config.Flag,
+		_prev = true,
+	}, Keybind)
+	window._keybinds[#window._keybinds + 1] = keybind
+	if keybind.Menu then
+		if keybind.Key then
+			window._toggleKey = keybind.Key
+		else
+			keybind.Key = window._toggleKey
+		end
+	end
+	return keybind
+end
+
+function Keybind:_fire(down)
+	if self.Mode == "Hold" then
+		self.State = down
+		runCallback(self.Callback, down)
+	elseif down then
+		if self.Mode == "Toggle" then
+			self.State = not self.State
+			runCallback(self.Callback, self.State)
+		else
+			runCallback(self.Callback)
+		end
+	end
+end
+
+function Keybind:_label()
+	if self.Window._listening == self then
+		return "..."
+	end
+	return self.Key and self.Key.name or "None"
+end
+
+function Keybind:_boxWidth()
+	return math.max(30, math.floor(textWidth(self:_label(), SMALL) * FIT_MARGIN) + 14)
+end
+
+-- draws the key box with its right edge at `right`; returns its width
+function Keybind:_drawBox(win, right, y, h)
+	local th = win.Theme
+	local w = self:_boxWidth()
+	local x = right - w
+	self._rect = { x = x, y = y, w = w, h = h }
+	local listening = win._listening == self
+	if win:_clickIn(x, y, w, h) and not listening then
+		win:_startListening(self)
+		listening = true
+	end
+	local hover = win:_over(x, y, w, h)
+	local fill = (hover or listening) and th.ElementHover or th.Element
+	win:_box(x, y, w, h, fill, listening and th.Accent or th.Border, 10, 3)
+	win:_text(self:_label(), x + w / 2, y + (h - SMALL) / 2 - 1, listening and th.Accent or th.TextDim, SMALL, 12, "center")
+	return w
+end
+
+function Keybind:Set(key)
+	if key ~= nil and type(key) ~= "table" then
+		key = resolveOptionalKey(key)
+	end
+	self.Key = key
+	self._prev = true
+	if self.Menu then
+		self.Window:SetToggleKey(key and key.vk or nil)
+	end
+	if self.Flag then
+		self.Window.Flags[self.Flag] = self:Get()
+	end
+	runCallback(self.ChangedCallback, self:Get())
+end
+
+function Keybind:Get()
+	return self.Key and self.Key.name or nil
+end
+
+function Keybind:GetState()
+	return self.State
+end
+
+-- standalone keybind row
+local KeybindRow = {}
+KeybindRow.__index = KeybindRow
+
+function Section:AddKeybind(config)
+	config = config or {}
+	local row = self:_add(setmetatable({ Text = config.Name or "Keybind" }, KeybindRow))
+	row.Keybind = newKeybind(self.Window, config)
+	if config.Flag then
+		self.Window.Flags[config.Flag] = row.Keybind:Get()
+	end
+	-- expose Set / Get / GetState on the row
+	row.Set = function(_, key)
+		row.Keybind:Set(key)
+	end
+	row.Get = function()
+		return row.Keybind:Get()
+	end
+	row.GetState = function()
+		return row.Keybind.State
+	end
+	return row
+end
+
+function KeybindRow:_height()
+	return 16
+end
+
+function KeybindRow:_draw(win, x, y, w, h)
+	local th = win.Theme
+	local boxW = self.Keybind:_drawBox(win, x + w, y, h)
+	win:_text(fitText(self.Text, w - boxW - 8, TEXT), x, y + (h - TEXT) / 2 - 1, th.Text, TEXT, 12)
+end
+
 --// textbox ------------------------------------------------------------------
 local Textbox = {}
 Textbox.__index = Textbox
@@ -1566,13 +1883,19 @@ function Textbox:_draw(win, x, y, w)
 		win:_text(fitText(self.Placeholder, inner, SMALL), x + 7, textY, th.TextMuted, SMALL, 12)
 	else
 		-- show the end of the text while typing so the caret stays visible
+		-- Drawing text can't be clipped, so only show what fits (with slack for wide letters)
 		local shown = self.Value
-		if textWidth(shown, SMALL) > inner - 4 then
+		local room = inner - 6
+		if textWidth(shown, SMALL) * FIT_MARGIN > room then
 			if focused then
-				local keep = math.max(1, math.floor((inner - 4) / (SMALL * charWidth())) - 4)
-				shown = "..." .. shown:sub(-keep)
+				-- keep the end visible while typing
+				local keep = #shown
+				while keep > 0 and textWidth("..." .. shown:sub(-keep), SMALL) * FIT_MARGIN > room do
+					keep = keep - 1
+				end
+				shown = "..." .. shown:sub(-math.max(keep, 0))
 			else
-				shown = fitText(shown, inner, SMALL)
+				shown = fitText(shown, room, SMALL)
 			end
 		end
 		win:_text(shown, x + 7, textY, th.Text, SMALL, 12)
