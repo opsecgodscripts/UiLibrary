@@ -8,21 +8,26 @@
 	works even in executors that can't touch game services.
 ]]
 
--- The ?t= part skips GitHub's cache so you always get the newest version.
-local URL = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
-local source = game:HttpGet(URL .. "?t=" .. tostring(os.time()))
+-- Matcha keeps showing errors but does not stop the script after error(), so each
+-- failure below prints a message and returns.
+local warn = warn or print
+local URL = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/UiLibrary/Library.lua"
+local source = game:HttpGet(URL)
 if type(source) ~= "string" or #source < 100 then
-	error("UiLibrary: download failed, got " .. tostring(source))
+	warn("UiLibrary: download failed, got " .. tostring(source))
+	return
 end
 
 local chunk, compileError = loadstring(source)
 if type(chunk) ~= "function" then
-	error("UiLibrary: compile error: " .. tostring(compileError))
+	warn("UiLibrary: compile error: " .. tostring(compileError))
+	return
 end
 
 local ok, result = pcall(chunk)
 if not ok then
-	error("UiLibrary: runtime error: " .. tostring(result))
+	warn("UiLibrary: runtime error: " .. tostring(result))
+	return
 end
 
 -- Matcha can drop the return value of a loadstring chunk; the library also sets _G.UiLibrary
@@ -31,8 +36,9 @@ if type(Library) ~= "table" and type(getgenv) == "function" then
 	Library = getgenv().UiLibrary
 end
 if type(Library) ~= "table" then
-	error("UiLibrary: loaded " .. #source .. " bytes but got no library"
+	warn("UiLibrary: loaded " .. #source .. " bytes but got no library"
 		.. (source:find("_G.UiLibrary", 1, true) and "" or " (old copy from GitHub's cache, try again in a few minutes)"))
+	return
 end
 
 local playerName = "Player"

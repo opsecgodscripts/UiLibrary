@@ -8,7 +8,7 @@
 	Load it straight from GitHub:
 
 	  local Library = loadstring(game:HttpGet(
-	      "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
+	      "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/UiLibrary/Library.lua"
 	  ))()
 
 	See test.lua for every element.
