@@ -1304,4 +1304,13 @@ function Dropdown:_isSelectedIn(options)
 	return false
 end
 
+-- Matcha can drop the value a loadstring chunk returns, so also expose the
+-- library globally. test.lua falls back to this.
+_G.UiLibrary = Library
+pcall(function()
+	if type(getgenv) == "function" then
+		getgenv().UiLibrary = Library
+	end
+end)
+
 return Library

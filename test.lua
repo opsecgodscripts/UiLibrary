@@ -11,6 +11,11 @@
 local Library = loadstring(game:HttpGet(
 	"https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
 ))()
+-- Matcha can drop the return value of a loadstring chunk; the library also sets _G.UiLibrary
+if type(Library) ~= "table" then
+	Library = _G.UiLibrary or (getgenv and getgenv().UiLibrary)
+end
+assert(type(Library) == "table", "UiLibrary failed to load")
 
 local playerName = "Player"
 pcall(function()
