@@ -61,8 +61,16 @@ local Window = Library:CreateWindow({
 	Font = "UI",             -- "UI", "Plex", "System" or "Monospace"
 })
 
+-- prints only while "Print Changes" is on
+local function logChange(...)
+	if Window.Flags.PrintChanges then
+		print(...)
+	end
+end
+
 local MainTab = Window:CreateTab({ Name = "Main", Icon = ">" })
 local VisualsTab = Window:CreateTab({ Name = "Visuals", Icon = "*" })
+local SettingsTab = Window:CreateTab({ Name = "Settings", Icon = "#" })
 
 --// Main tab: left section -----------------------------------------------------
 local General = MainTab:CreateSection({ Name = "General", Side = "Left", Icon = "+" })
@@ -98,7 +106,7 @@ General:AddToggle({
 	Flag = "PrintChanges",
 	Keybind = "P",
 	Callback = function(enabled)
-		print("Print changes:", enabled)
+		print("Print changes:", enabled and "on" or "off")
 	end,
 })
 
@@ -165,7 +173,7 @@ Options:AddDropdown({
 	Default = { "Red", "Purple" },
 	Flag = "Colors",
 	Callback = function(values)
-		print("Colors:", table.concat(values, ", "))
+		logChange("Colors:", table.concat(values, ", "))
 	end,
 })
 
@@ -175,7 +183,7 @@ Options:AddDropdown({
 	Options = { "Easy", "Normal", "Hard" },
 	Flag = "Mode",
 	Callback = function(value)
-		print("Mode:", value)
+		logChange("Mode:", value)
 	end,
 })
 
@@ -185,7 +193,7 @@ Options:AddDropdown({
 	Default = "Hello",
 	Flag = "Greeting",
 	Callback = function(value)
-		print("Greeting set to", value)
+		logChange("Greeting set to", value)
 	end,
 })
 
@@ -198,7 +206,7 @@ Options:AddSlider({
 	Suffix = "%",
 	Flag = "Volume",
 	Callback = function(value)
-		print("Volume", value)
+		logChange("Volume", value)
 	end,
 })
 
@@ -229,7 +237,7 @@ Options:AddTextbox({
 	Numeric = true,
 	Flag = "WalkSpeedValue",
 	Callback = function(value)
-		print("Number entered:", value)
+		logChange("Number entered:", value)
 	end,
 })
 
@@ -252,6 +260,40 @@ Help:AddLabel("Theme, font, menu key, notifications and configs are in the UI ta
 Help:AddLabel("Click a key box, then press a key to rebind. Escape cancels, Backspace clears.")
 Help:AddLabel("Anything with a Flag is saved and comes back when you run the script again.")
 
+--// Settings tab: settings for this script (the UI tab has the ones every script shares)
+local ScriptSettings = SettingsTab:CreateSection({ Name = "Script", Side = "Left", Icon = "#" })
+
+ScriptSettings:AddSlider({
+	Name = "Notification Time",
+	Min = 1,
+	Max = 10,
+	Default = 3,
+	Suffix = "s",
+	Flag = "NotifyTime",
+})
+
+ScriptSettings:AddToggle({
+	Name = "Welcome Message",
+	Default = true,
+	Flag = "WelcomeMessage",
+})
+
+ScriptSettings:AddButton({
+	Name = "Test Notification",
+	Callback = function()
+		Window:Notify("Settings", "This stays for " .. Window.Flags.NotifyTime .. " seconds", Window.Flags.NotifyTime)
+	end,
+})
+
+local About = SettingsTab:CreateSection({ Name = "About", Side = "Right", Icon = "#" })
+About:AddLabel("Settings here belong to this script. Theme, font, menu key and configs are in the UI tab.")
+
 -- The footer starts as "Disconnected" with a red dot; this turns it green.
 Window:SetStatus("Connected as " .. playerName, true)
-Window:Notify("Loaded", "UiLibrary is ready. RightShift hides it.", 4)
+-- saved settings are applied right after the script builds the UI, so wait a moment
+task.spawn(function()
+	task.wait(0.1)
+	if Window.Running and Window.Flags.WelcomeMessage then
+		Window:Notify("Loaded", "UiLibrary is ready. RightShift hides it.", Window.Flags.NotifyTime or 3)
+	end
+end)

@@ -555,7 +555,12 @@ function Json.encode(value)
 end
 
 function Json.decode(text)
+	-- returns nil on bad input; never calls error() (Matcha prints those even inside pcall)
+	if type(text) ~= "string" or not text:find("%S") then
+		return nil
+	end
 	local pos = 1
+	local failed = false
 	local function skip()
 		pos = text:find("[^ \t\r\n]", pos) or (#text + 1)
 	end
@@ -563,10 +568,10 @@ function Json.decode(text)
 	local function parseString()
 		pos = pos + 1
 		local out = {}
-		while true do
+		while not failed do
 			local c = text:sub(pos, pos)
 			if c == "" then
-				error("unterminated string")
+				failed = true
 			elseif c == '"' then
 				pos = pos + 1
 				break
@@ -589,6 +594,9 @@ function Json.decode(text)
 		return table.concat(out)
 	end
 	function parseValue()
+		if failed then
+			return nil
+		end
 		skip()
 		local c = text:sub(pos, pos)
 		if c == "{" then
@@ -599,19 +607,30 @@ function Json.decode(text)
 				pos = pos + 1
 				return obj
 			end
-			while true do
+			while not failed do
 				skip()
+				if text:sub(pos, pos) ~= '"' then
+					failed = true
+					return nil
+				end
 				local key = parseString()
 				skip()
-				pos = pos + 1 -- :
+				if text:sub(pos, pos) ~= ":" then
+					failed = true
+					return nil
+				end
+				pos = pos + 1
 				obj[key] = parseValue()
 				skip()
 				local d = text:sub(pos, pos)
 				pos = pos + 1
 				if d == "}" then
 					return obj
+				elseif d ~= "," then
+					failed = true
 				end
 			end
+			return nil
 		elseif c == "[" then
 			pos = pos + 1
 			local arr = {}
@@ -620,15 +639,18 @@ function Json.decode(text)
 				pos = pos + 1
 				return arr
 			end
-			while true do
+			while not failed do
 				arr[#arr + 1] = parseValue()
 				skip()
 				local d = text:sub(pos, pos)
 				pos = pos + 1
 				if d == "]" then
 					return arr
+				elseif d ~= "," then
+					failed = true
 				end
 			end
+			return nil
 		elseif c == '"' then
 			return parseString()
 		elseif text:sub(pos, pos + 3) == "true" then
@@ -640,20 +662,20 @@ function Json.decode(text)
 		elseif text:sub(pos, pos + 3) == "null" then
 			pos = pos + 4
 			return nil
-		else
-			local num = text:match("^-?%d+%.?%d*[eE]?[-+]?%d*", pos)
-			if not num or num == "" then
-				error("bad json at " .. pos)
-			end
-			pos = pos + #num
-			return tonumber(num)
 		end
+		local num = text:match("^-?%d+%.?%d*[eE]?[-+]?%d*", pos)
+		if not num or num == "" then
+			failed = true
+			return nil
+		end
+		pos = pos + #num
+		return tonumber(num)
 	end
-	local ok, result = pcall(parseValue)
-	if ok then
-		return result
+	local result = parseValue()
+	if failed then
+		return nil
 	end
-	return nil
+	return result
 end
 
 --// storage: files when the executor has them, otherwise memory ---------------
@@ -933,7 +955,15 @@ function Library:CreateWindow(config)
 end
 
 --// drawing pool -------------------------------------------------------------
+-- after Destroy, drawing calls go to a throwaway table instead of creating new objects
+local deadObject = setmetatable({}, { __newindex = function() end, __index = function()
+	return function() end
+end })
+
 function Window:_get(kind)
+	if not self.Running then
+		return deadObject
+	end
 	local used = self._used[kind] + 1
 	self._used[kind] = used
 	local object = self._pool[kind][used]
@@ -1117,6 +1147,9 @@ function Window:_frame()
 		self._openDropdown = nil
 		self._overlay = nil
 	end
+	if not self.Running then
+		return
+	end
 	self:_drawNotifications(t)
 
 	-- restore saved values for elements created since last frame (after the script built them)
@@ -1132,6 +1165,9 @@ function Window:_frame()
 	end
 	if self._dirty and self._autoSave and t - self._lastChange > 0.5 then
 		self:SaveSettings()
+	end
+	if not self.Running then
+		return
 	end
 
 	self:_hideUnused()
@@ -1761,18 +1797,28 @@ function Window:Destroy()
 		pcall(self.SaveSettings, self)
 	end
 	self.Running = false
+	self.Visible = false
+	self._notifications = {}
+	self._keybinds = {}
+	self._focusedBox = nil
+	self._listening = nil
+	self._openDropdown = nil
 	for _, list in pairs(self._pool) do
 		for _, object in ipairs(list) do
 			pcall(function()
 				object.Visible = false
+			end)
+			pcall(function()
 				object:Remove()
 			end)
 		end
 	end
 	self._pool = { Square = {}, Text = {}, Circle = {}, Line = {}, Image = {} }
 	local env = (type(getgenv) == "function" and getgenv()) or _G
-	if env.__UiLibraryWindow == self then
-		env.__UiLibraryWindow = nil
+	for _, holder in ipairs({ env, _G, type(shared) == "table" and shared or {} }) do
+		if rawget(holder, "__UiLibraryWindow") == self then
+			rawset(holder, "__UiLibraryWindow", nil)
+		end
 	end
 	if Library.ActiveWindow == self then
 		Library.ActiveWindow = nil
@@ -2476,7 +2522,9 @@ function Dropdown:_restore(value)
 				list[#list + 1] = v
 			end
 		end
-		self:Set(list)
+		if table.concat(list, "\0") ~= table.concat(self.Value, "\0") then
+			self:Set(list)
+		end
 	elseif valid[value] and value ~= self.Value then
 		self:Set(value)
 	end
