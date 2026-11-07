@@ -18,6 +18,7 @@
 	    Logo:      link to a PNG / JPG / WebP image, drawn 20 x 20 in the top-left
 	    Font:      "UI" (default), "Plex", "System" or "Monospace"
 	    Theme:     "Default", "Tung", or a table of colors
+	    MaxFps:    cap how often the UI redraws (default: every frame)
 	    ToggleKey: "RightShift", "Insert", "F1", "K" ... or a virtual-key number (0xA1)
 	               or an Enum.KeyCode if the executor has Enum.
 	    Size:      Vector2/UDim2 (default 450 x 557) or just a width. The window grows
@@ -896,6 +897,7 @@ function Library:CreateWindow(config)
 		_activeSlider = nil,
 		_openDropdown = nil,
 		_focusedBox = nil,
+		_maxFps = tonumber(config.MaxFps),
 		PerformanceEnabled = false,
 		_perfPos = nil,
 		_perfDrag = nil,
@@ -959,7 +961,12 @@ function Library:CreateWindow(config)
 				self._lastError = tostring(err)
 				log("render error:", err)
 			end
-			waitTask(0.01)
+			-- redraw every frame (no fixed delay); MaxFps caps it if you want to save CPU
+			if self._maxFps then
+				waitTask(1 / self._maxFps)
+			else
+				waitTask()
+			end
 		end
 	end)
 
@@ -1314,35 +1321,118 @@ pcall(function()
 	Stats = game:GetService("Stats")
 end)
 
+-- Matcha prints errors even inside pcall, so these lookups avoid erroring:
+-- FindFirstChild instead of indexing, type checks before calling.
+local function child(parent, name)
+	if parent == nil then
+		return nil
+	end
+	local ok, found = pcall(function()
+		return parent:FindFirstChild(name)
+	end)
+	return ok and found or nil
+end
+
+local function itemValue(item)
+	if item == nil then
+		return nil
+	end
+	local ok, v = pcall(function()
+		return item.Value
+	end)
+	if ok and type(v) == "number" then
+		return v
+	end
+	ok, v = pcall(function()
+		return item:GetValue()
+	end)
+	if ok and type(v) == "number" then
+		return v
+	end
+	ok, v = pcall(function()
+		return tonumber(tostring(item:GetValueString()):match("[%d%.]+"))
+	end)
+	return ok and v or nil
+end
+
+local function nativePing()
+	local fn = rawget(_G, "GetPingValue")
+	if type(fn) ~= "function" and type(getgenv) == "function" then
+		local env = getgenv()
+		fn = type(env) == "table" and rawget(env, "GetPingValue") or nil
+	end
+	if type(fn) ~= "function" then
+		pcall(function()
+			fn = GetPingValue
+		end)
+	end
+	if type(fn) == "function" then
+		local ok, v = pcall(fn)
+		return ok and v or nil
+	end
+	return nil
+end
+
+-- tried in order until one gives a usable number; the working one is remembered
+local PingMethods = {
+	{ "native GetPingValue", nativePing },
+	{ "Data Ping", function()
+		return itemValue(child(child(child(Stats, "Network"), "ServerStatsItem"), "Data Ping"))
+	end },
+	{ "PerformanceStats.Ping", function()
+		return itemValue(child(child(Stats, "PerformanceStats"), "Ping"))
+	end },
+	{ "GetNetworkPing", function()
+		local ok, v = pcall(function()
+			return Players.LocalPlayer:GetNetworkPing() * 1000
+		end)
+		return ok and v or nil
+	end },
+}
+
+local function validPing(v)
+	return type(v) == "number" and v == v and v > 0 and v < 10000
+end
+
+local pingMethod = nil -- index of the method that worked last
+local pingRetryAt = 0
+
+local function readPing()
+	if pingMethod then
+		local v = PingMethods[pingMethod][2]()
+		if validPing(v) then
+			return v
+		end
+		pingMethod = nil
+	end
+	if now() < pingRetryAt then
+		return nil
+	end
+	for i, method in ipairs(PingMethods) do
+		local v = method[2]()
+		if validPing(v) then
+			pingMethod = i
+			Library.PingMethod = method[1]
+			return v
+		end
+	end
+	Library.PingMethod = "none"
+	pingRetryAt = now() + 10 -- nothing works right now; don't try every update
+	return nil
+end
+
+local fpsMethodWorks = true
 local function readFps()
+	if not fpsMethodWorks then
+		return nil
+	end
 	if type(getfps) == "function" then
 		local ok, v = pcall(getfps)
 		if ok and type(v) == "number" and v > 0 then
 			return v
 		end
 	end
-	local ok, v = pcall(function()
-		return workspace:GetRealPhysicsFPS()
-	end)
-	if ok and type(v) == "number" and v > 0 then
-		return v
-	end
-	return nil
-end
-
-local function readPing()
-	local ok, v = pcall(function()
-		return Players.LocalPlayer:GetNetworkPing() * 1000
-	end)
-	if ok and type(v) == "number" and v > 0 then
-		return v
-	end
-	ok, v = pcall(function()
-		return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
-	end)
-	if ok and type(v) == "number" and v > 0 then
-		return v
-	end
+	fpsMethodWorks = false -- fall back to the UI's own frame rate from now on
 	return nil
 end
 

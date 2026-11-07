@@ -41,10 +41,6 @@ if type(Library) ~= "table" then
 	return
 end
 
-local playerName = "Player"
-pcall(function()
-	playerName = game:GetService("Players").LocalPlayer.Name
-end)
 
 local fpsRunning = false
 
@@ -83,7 +79,7 @@ General:AddToggle({
 	Callback = function(enabled)
 		fpsRunning = enabled
 		if not enabled then
-			Window:SetStatus("Connected as " .. playerName, true)
+			Window:SetStatus("Connected", true)
 			return
 		end
 		local frames, started = 0, os.clock()
@@ -152,7 +148,7 @@ General:AddKeybind({
 	Default = "None", -- unbound until you click the box and press a key
 	Mode = "Hold",
 	Callback = function(held)
-		Window:SetStatus(held and "Holding..." or ("Connected as " .. playerName), true)
+		Window:SetStatus(held and "Holding..." or "Connected", true)
 	end,
 })
 
@@ -289,7 +285,7 @@ local About = MiscTab:CreateSection({ Name = "About", Side = "Right" })
 About:AddLabel("Settings here belong to this script. Theme, font, menu key and configs are in the UI tab.")
 
 -- The footer starts as "Disconnected" with a red dot; this turns it green.
-Window:SetStatus("Connected as " .. playerName, true)
+Window:SetStatus("Connected", true)
 -- saved settings are applied right after the script builds the UI, so wait a moment
 task.spawn(function()
 	task.wait(0.1)
