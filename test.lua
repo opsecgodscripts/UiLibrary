@@ -1,117 +1,93 @@
 --[[
 	Test — example script that uses every element in UiLibrary.
 
-	Run this file. It downloads the library from GitHub, builds the window,
-	and RightShift shows / hides it.
-]]
+	Run this file in your executor. It downloads the library from GitHub,
+	builds the window, and RightShift shows / hides it.
 
-local Players = game:GetService("Players")
-local Lighting = game:GetService("Lighting")
-local RunService = game:GetService("RunService")
+	The callbacks here only print, notify or change the UI itself, so the demo
+	works even in executors that can't touch game services.
+]]
 
 local Library = loadstring(game:HttpGet(
 	"https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
 ))()
 
-local Player = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+local playerName = "Player"
+pcall(function()
+	playerName = game:GetService("Players").LocalPlayer.Name
+end)
 
 --// Window ------------------------------------------------------------------
 local Window = Library:CreateWindow({
 	Title = "Niph",
 	Subtitle = "Demo",
-	ToggleKey = Enum.KeyCode.RightShift,
-	-- Logo = "rbxassetid://0000000", -- optional image instead of the default mark
+	ToggleKey = "RightShift", -- or "Insert", "F1", "K", or a virtual-key number like 0xA1
+	Size = 470,              -- width; height fits the content
 })
 
--- Icons can be a short text glyph or an image: Icon = "rbxassetid://123"
-local MainTab = Window:CreateTab({ Name = "Main", Icon = "◆" })
-local VisualsTab = Window:CreateTab({ Name = "Visuals", Icon = "◉" })
-local SettingsTab = Window:CreateTab({ Name = "Settings", Icon = "≡" })
+local MainTab = Window:CreateTab({ Name = "Main", Icon = ">" })
+local VisualsTab = Window:CreateTab({ Name = "Visuals", Icon = "*" })
+local SettingsTab = Window:CreateTab({ Name = "Settings", Icon = "#" })
 
 --// Main tab: left section -----------------------------------------------------
-local General = MainTab:CreateSection({ Name = "General", Side = "Left", Icon = "✦" })
+local General = MainTab:CreateSection({ Name = "General", Side = "Left", Icon = "+" })
 
 -- Toggle: FPS counter in the footer
-local fpsConnection
+local fpsRunning = false
 General:AddToggle({
 	Name = "Show FPS",
 	Default = false,
 	Flag = "ShowFPS",
 	Callback = function(enabled)
-		if fpsConnection then
-			fpsConnection:Disconnect()
-			fpsConnection = nil
+		fpsRunning = enabled
+		if not enabled then
+			Window:SetStatus("Connected as " .. playerName, true)
+			return
 		end
-		if enabled then
-			local frames, elapsed = 0, 0
-			fpsConnection = RunService.RenderStepped:Connect(function(dt)
-				frames += 1
-				elapsed += dt
-				if elapsed >= 0.5 then
-					Window:SetStatus(string.format("%d FPS", frames / elapsed), true)
-					frames, elapsed = 0, 0
-				end
-			end)
-		else
-			Window:SetStatus("Connected as " .. Player.Name, true)
+		local frames, started = 0, os.clock()
+		while fpsRunning and Window.Running do
+			task.wait()
+			frames = frames + 1
+			local elapsed = os.clock() - started
+			if elapsed >= 0.5 then
+				Window:SetStatus(string.format("%d FPS", frames / elapsed), true)
+				frames, started = 0, os.clock()
+			end
 		end
 	end,
 })
 
 General:AddToggle({
-	Name = "Print Chat Messages",
+	Name = "Print Changes",
 	Default = false,
-	Flag = "PrintChat",
+	Flag = "PrintChanges",
 	Callback = function(enabled)
-		print("Print chat messages:", enabled)
+		print("Print changes:", enabled)
 	end,
 })
 
-General:AddToggle({
-	Name = "Hide Player List",
-	Default = false,
-	Flag = "HidePlayerList",
-	Callback = function(enabled)
-		game:GetService("StarterGui"):SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, not enabled)
-	end,
-})
-
--- Button between toggles, like the reference layout
 General:AddButton({
 	Name = "Send Test Notification",
 	Callback = function()
-		Window:Notify("Hello", "This is a notification from Test.lua", 3)
-	end,
-})
-
-General:AddToggle({
-	Name = "Shadows",
-	Default = Lighting.GlobalShadows,
-	Flag = "Shadows",
-	Callback = function(enabled)
-		Lighting.GlobalShadows = enabled
+		Window:Notify("Hello", "This is a notification from test.lua", 3)
 	end,
 })
 
 -- A toggle that starts on
 General:AddToggle({
-	Name = "Notify on Join",
+	Name = "Notify on Click",
 	Default = true,
-	Flag = "NotifyOnJoin",
+	Flag = "NotifyOnClick",
 })
-
-Players.PlayerAdded:Connect(function(newPlayer)
-	if Window.Flags.NotifyOnJoin then
-		Window:Notify("Player joined", newPlayer.Name, 3)
-	end
-end)
 
 General:AddButton({
 	Name = "Print Flags",
 	Callback = function()
 		for flag, value in pairs(Window.Flags) do
-			print(flag, "=", typeof(value) == "table" and table.concat(value, ", ") or tostring(value))
+			print(flag, "=", type(value) == "table" and table.concat(value, ", ") or tostring(value))
+		end
+		if Window.Flags.NotifyOnClick then
+			Window:Notify("Flags", "Printed every flag to the console", 3)
 		end
 	end,
 })
@@ -147,7 +123,6 @@ Options:AddDropdown({
 	end,
 })
 
--- Single-select dropdowns
 Options:AddDropdown({
 	Name = "Greeting",
 	Options = { "Hello", "Hi", "Hey", "Yo" },
@@ -156,13 +131,6 @@ Options:AddDropdown({
 	Callback = function(value)
 		print("Greeting set to", value)
 	end,
-})
-
-Options:AddDropdown({
-	Name = "Start From",
-	Options = { "Top", "Middle", "Bottom" },
-	Default = "Top",
-	Flag = "StartFrom",
 })
 
 -- Sliders with a suffix
@@ -178,69 +146,71 @@ Options:AddSlider({
 	end,
 })
 
-Options:AddSlider({
-	Name = "Max Zoom",
-	Min = 10,
-	Max = 400,
-	Default = Player.CameraMaxZoomDistance,
-	Suffix = " studs",
-	Flag = "MaxZoom",
-	Callback = function(value)
-		Player.CameraMaxZoomDistance = value
-	end,
-})
-
---// Visuals tab --------------------------------------------------------------
-local CameraSection = VisualsTab:CreateSection({ Name = "Camera", Side = "Left", Icon = "◉" })
-
-CameraSection:AddSlider({
-	Name = "Field of View",
-	Min = 50,
-	Max = 120,
-	Default = Camera.FieldOfView,
-	Suffix = "°",
-	Callback = function(value)
-		Camera.FieldOfView = value
-	end,
-})
-
-local World = VisualsTab:CreateSection({ Name = "World", Side = "Right", Icon = "✦" })
-
-local times = { Morning = 7, Noon = 12, Evening = 18, Night = 0 }
-World:AddDropdown({
-	Name = "Time of Day",
-	Options = { "Morning", "Noon", "Evening", "Night" },
-	Callback = function(value)
-		Lighting.ClockTime = times[value]
-	end,
-})
-
 -- Slider with decimals
-World:AddSlider({
-	Name = "Brightness",
+Options:AddSlider({
+	Name = "Speed",
 	Min = 0,
 	Max = 5,
 	Increment = 0.1,
-	Default = Lighting.Brightness,
+	Default = 1,
+	Suffix = "x",
+	Flag = "Speed",
+})
+
+--// Visuals tab --------------------------------------------------------------
+local Look = VisualsTab:CreateSection({ Name = "Look", Side = "Left", Icon = "*" })
+
+-- Changing the theme at runtime: everything is redrawn every frame
+local accents = {
+	Pink = Color3.fromRGB(214, 72, 104),
+	Purple = Color3.fromRGB(125, 85, 255),
+	Blue = Color3.fromRGB(70, 130, 240),
+	Green = Color3.fromRGB(70, 190, 120),
+}
+Look:AddDropdown({
+	Name = "Accent Color",
+	Options = { "Pink", "Purple", "Blue", "Green" },
+	Default = "Pink",
 	Callback = function(value)
-		Lighting.Brightness = value
+		Window.Theme.Accent = accents[value]
+	end,
+})
+
+Look:AddLabel("The accent color updates instantly.")
+
+local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Right", Icon = "*" })
+local counterLabel = Info:AddLabel("Button pressed 0 times")
+local presses = 0
+local counterButton
+counterButton = Info:AddButton({
+	Name = "Press me",
+	Callback = function()
+		presses = presses + 1
+		counterLabel:Set("Button pressed " .. presses .. " times")
+		counterButton:SetText("Pressed " .. presses .. "x")
 	end,
 })
 
 --// Settings tab -------------------------------------------------------------
-local Interface = SettingsTab:CreateSection({ Name = "Interface", Side = "Left", Icon = "≡" })
+local Interface = SettingsTab:CreateSection({ Name = "Interface", Side = "Left", Icon = "#" })
 
-Interface:AddLabel("Press RightShift to show or hide this window.")
+Interface:AddLabel("Press RightShift to show or hide this window. Drag it by the top bar.")
 
 Interface:AddButton({
-	Name = "Destroy UI",
+	Name = "Hide UI",
 	Callback = function()
-		if fpsConnection then
-			fpsConnection:Disconnect()
-		end
+		Window:Toggle(false)
+	end,
+})
+
+Interface:AddButton({
+	Name = "Unload",
+	Callback = function()
+		fpsRunning = false
 		Window:Destroy()
 	end,
 })
 
 -- The footer starts as "Disconnected" with a red dot; this turns it green.
-Window:SetStatus("Connected as " .. Player.Name, true)
+Window:SetStatus("Connected as " .. playerName, true)
+Window:Notify("Loaded", "UiLibrary is ready. RightShift hides it.", 4)
