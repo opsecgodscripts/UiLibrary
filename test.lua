@@ -1,5 +1,5 @@
 --[[
-	Test — example script that uses every element in UiLibrary.
+	Test - example script that uses every element in UiLibrary.
 
 	Run this file in your executor. It downloads the library from GitHub,
 	builds the window, and RightShift shows / hides it.
@@ -8,14 +8,32 @@
 	works even in executors that can't touch game services.
 ]]
 
-local Library = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
-))()
--- Matcha can drop the return value of a loadstring chunk; the library also sets _G.UiLibrary
-if type(Library) ~= "table" then
-	Library = _G.UiLibrary or (getgenv and getgenv().UiLibrary)
+-- The ?t= part skips GitHub's cache so you always get the newest version.
+local URL = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
+local source = game:HttpGet(URL .. "?t=" .. tostring(os.time()))
+if type(source) ~= "string" or #source < 100 then
+	error("UiLibrary: download failed, got " .. tostring(source))
 end
-assert(type(Library) == "table", "UiLibrary failed to load")
+
+local chunk, compileError = loadstring(source)
+if type(chunk) ~= "function" then
+	error("UiLibrary: compile error: " .. tostring(compileError))
+end
+
+local ok, result = pcall(chunk)
+if not ok then
+	error("UiLibrary: runtime error: " .. tostring(result))
+end
+
+-- Matcha can drop the return value of a loadstring chunk; the library also sets _G.UiLibrary
+local Library = type(result) == "table" and result or _G.UiLibrary
+if type(Library) ~= "table" and type(getgenv) == "function" then
+	Library = getgenv().UiLibrary
+end
+if type(Library) ~= "table" then
+	error("UiLibrary: loaded " .. #source .. " bytes but got no library"
+		.. (source:find("_G.UiLibrary", 1, true) and "" or " (old copy from GitHub's cache, try again in a few minutes)"))
+end
 
 local playerName = "Player"
 pcall(function()

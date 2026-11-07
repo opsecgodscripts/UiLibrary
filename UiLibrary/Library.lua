@@ -1,5 +1,5 @@
 --[[
-	UiLibrary — a dark, two-column UI library for Roblox, drawn with the Drawing API.
+	UiLibrary - a dark, two-column UI library for Roblox, drawn with the Drawing API.
 
 	Works in executors that only have Drawing (Matcha and similar): no ScreenGui,
 	no Instance.new, no TweenService. Everything is redrawn every frame and input
@@ -42,7 +42,7 @@
 	the element is created.
 
 	Icons are short text. Stick to plain ASCII (">", "+", "*", "#") because the
-	Drawing font may not have symbols like ✦. Image icons are not supported.
+	Drawing font may not have symbols or emoji. Image icons are not supported.
 ]]
 
 local Library = {}
