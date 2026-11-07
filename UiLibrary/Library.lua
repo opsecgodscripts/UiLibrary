@@ -62,7 +62,7 @@
 	  element to skip it, or AutoSave = false to CreateWindow to turn this off.
 	  Window:SaveConfig(name) :LoadConfig(name) :RenameConfig(old, new) :DeleteConfig(name)
 	  Window:ListConfigs()     Window:SaveSettings()
-	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete UI
+	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete / Autoload UI
 
 	Built-in UI tab
 	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, FPS Cap, Show Performance
@@ -109,6 +109,26 @@ pcall(function()
 	end
 end)
 local FONT = FontIds.UI
+
+-- names for the Font dropdown: the standard four first, then anything extra the executor has
+local function fontNames()
+	local names = { "UI", "System", "Plex", "Monospace" }
+	local seen = { UI = true, System = true, Plex = true, Monospace = true }
+	pcall(function()
+		local extra = {}
+		for name, id in pairs(Drawing.Fonts) do
+			if type(name) == "string" and type(id) == "number" and not seen[name] then
+				FontIds[name] = id
+				extra[#extra + 1] = name
+			end
+		end
+		table.sort(extra)
+		for _, name in ipairs(extra) do
+			names[#names + 1] = name
+		end
+	end)
+	return names
+end
 
 local spawnTask = (task and task.spawn) or function(fn, ...)
 	return coroutine.wrap(fn)(...)
@@ -200,6 +220,58 @@ Library.Themes = {
 	},
 }
 
+local function rgb(r, g, b)
+	return Color3.fromRGB(r, g, b)
+end
+
+local function addTheme(name, c)
+	Library.Themes[name] = c
+end
+
+addTheme("Dark", {
+	Background = rgb(7, 7, 8), Topbar = rgb(17, 17, 19), TabActive = rgb(3, 3, 4), Footer = rgb(17, 17, 19),
+	Section = rgb(12, 12, 14), SectionHeader = rgb(21, 21, 24), Element = rgb(27, 27, 30), ElementHover = rgb(36, 36, 40),
+	Border = rgb(30, 30, 33), Accent = rgb(130, 140, 160), AccentSoft = rgb(80, 86, 100),
+	Text = rgb(236, 236, 238), TextDim = rgb(138, 138, 144), TextMuted = rgb(92, 92, 98),
+})
+addTheme("Light", {
+	Background = rgb(226, 226, 232), Topbar = rgb(246, 246, 249), TabActive = rgb(214, 214, 222), Footer = rgb(240, 240, 244),
+	Section = rgb(244, 244, 247), SectionHeader = rgb(232, 232, 238), Element = rgb(220, 220, 228), ElementHover = rgb(208, 208, 218),
+	Border = rgb(204, 204, 212), Accent = rgb(60, 110, 230), AccentSoft = rgb(140, 175, 245), AccentText = rgb(255, 255, 255),
+	Text = rgb(24, 24, 30), TextDim = rgb(92, 92, 104), TextMuted = rgb(140, 140, 152),
+	Good = rgb(40, 160, 80), Bad = rgb(210, 50, 60),
+})
+addTheme("Midnight", {
+	Background = rgb(9, 11, 21), Topbar = rgb(18, 22, 38), TabActive = rgb(5, 7, 15), Footer = rgb(18, 22, 38),
+	Section = rgb(13, 16, 29), SectionHeader = rgb(22, 27, 46), Element = rgb(28, 34, 56), ElementHover = rgb(36, 44, 70),
+	Border = rgb(30, 36, 60), Accent = rgb(92, 132, 255), AccentSoft = rgb(60, 88, 188),
+	Text = rgb(228, 232, 246), TextDim = rgb(130, 140, 172), TextMuted = rgb(88, 96, 124),
+})
+addTheme("Ocean", {
+	Background = rgb(7, 14, 18), Topbar = rgb(14, 26, 32), TabActive = rgb(4, 9, 12), Footer = rgb(14, 26, 32),
+	Section = rgb(10, 20, 25), SectionHeader = rgb(18, 33, 41), Element = rgb(22, 40, 50), ElementHover = rgb(30, 52, 64),
+	Border = rgb(24, 44, 54), Accent = rgb(38, 192, 212), AccentSoft = rgb(28, 126, 140),
+	Text = rgb(224, 240, 245), TextDim = rgb(124, 160, 170), TextMuted = rgb(84, 110, 120),
+})
+addTheme("Forest", {
+	Background = rgb(9, 14, 11), Topbar = rgb(18, 27, 20), TabActive = rgb(5, 9, 6), Footer = rgb(18, 27, 20),
+	Section = rgb(13, 20, 15), SectionHeader = rgb(22, 33, 25), Element = rgb(28, 41, 31), ElementHover = rgb(36, 53, 40),
+	Border = rgb(30, 45, 34), Accent = rgb(92, 192, 110), AccentSoft = rgb(56, 130, 74),
+	Text = rgb(230, 241, 232), TextDim = rgb(134, 160, 140), TextMuted = rgb(90, 110, 95),
+})
+addTheme("Amethyst", {
+	Background = rgb(13, 9, 20), Topbar = rgb(26, 18, 37), TabActive = rgb(8, 5, 13), Footer = rgb(26, 18, 37),
+	Section = rgb(19, 13, 28), SectionHeader = rgb(32, 22, 45), Element = rgb(40, 28, 56), ElementHover = rgb(52, 36, 71),
+	Border = rgb(44, 30, 61), Accent = rgb(162, 102, 255), AccentSoft = rgb(110, 70, 182),
+	Text = rgb(238, 230, 248), TextDim = rgb(155, 140, 176), TextMuted = rgb(104, 94, 126),
+})
+addTheme("Crimson", {
+	Background = rgb(15, 7, 8), Topbar = rgb(30, 14, 16), TabActive = rgb(9, 4, 5), Footer = rgb(30, 14, 16),
+	Section = rgb(22, 10, 12), SectionHeader = rgb(37, 17, 19), Element = rgb(47, 22, 25), ElementHover = rgb(61, 28, 32),
+	Border = rgb(51, 24, 27), Accent = rgb(226, 52, 62), AccentSoft = rgb(150, 36, 43),
+	Text = rgb(246, 230, 231), TextDim = rgb(170, 134, 137), TextMuted = rgb(114, 90, 92),
+})
+
 local function buildTheme(theme)
 	local out = {}
 	for k, v in pairs(DefaultTheme) do
@@ -245,8 +317,41 @@ local function charWidth()
 	return FONT == FontIds.Monospace and 0.72 or 0.5
 end
 
+-- relative letter widths for the proportional fonts, calibrated on Matcha screenshots
+local LetterWidth = {}
+for c in ("abcdeghknopqsuvxyz"):gmatch(".") do
+	LetterWidth[c] = 0.52
+end
+for c in ("ijl'|!.,:;"):gmatch(".") do
+	LetterWidth[c] = 0.25
+end
+for c in ("tfr()[]{}"):gmatch(".") do
+	LetterWidth[c] = 0.32
+end
+LetterWidth[" "] = 0.28
+LetterWidth.m, LetterWidth.w = 0.78, 0.72
+for c in ("ABCDEFGHJKLNOPQRSTUVXYZ"):gmatch(".") do
+	LetterWidth[c] = 0.62
+end
+LetterWidth.I, LetterWidth.M, LetterWidth.W = 0.28, 0.78, 0.85
+for c in ("0123456789"):gmatch(".") do
+	LetterWidth[c] = 0.55
+end
+
 local function textWidth(text, size)
-	return charCount(text) * size * charWidth()
+	if type(Library.CharWidth) == "number" or FONT == FontIds.Monospace then
+		return charCount(text) * size * charWidth()
+	end
+	local total = 0
+	for i = 1, #text do
+		local b = text:byte(i)
+		if b < 128 then
+			total = total + (LetterWidth[string.char(b)] or 0.55)
+		elseif b >= 192 then
+			total = total + 0.6 -- first byte of a non-ASCII character
+		end
+	end
+	return total * size * 0.9
 end
 
 local FIT_MARGIN = 1.12 -- estimates can be a bit short for wide letters, so fit with some slack
@@ -1190,6 +1295,13 @@ function Window:_frame()
 			end
 		end
 	end
+	if self._autoloadPending and #self._pendingRestore == 0 then
+		local name = self._autoloadPending
+		self._autoloadPending = nil
+		if self:LoadConfig(name) then
+			self:Notify("Configs", "Autoloaded " .. name, 3)
+		end
+	end
 	if self._dirty and self._autoSave and t - self._lastChange > 0.5 then
 		self:SaveSettings()
 	end
@@ -1898,14 +2010,17 @@ function Window:SaveSettings()
 end
 
 function Window:_applyValues(data)
-	for _, flag in ipairs(self._saveOrder) do
-		local value = data[flag]
-		if value ~= nil then
-			local element = self._saveables[flag]
+	for flag, value in pairs(data) do
+		local element = self._saveables[flag]
+		if element then
 			local ok, err = pcall(element._restore, element, value)
 			if not ok then
 				log("couldn't load", flag, err)
 			end
+		else
+			-- element not created yet (e.g. autoload runs while the script is still
+			-- building the UI): it picks this value up when it's created
+			self._saved[flag] = value
 		end
 	end
 end
@@ -2293,8 +2408,9 @@ function Toggle:_draw(win, x, y, w, h)
 		win:_rect(bx - 2, by - 2, size + 4, size + 4, th.AccentSoft, 10, 5, 0.35)
 		win:_box(bx, by, size, size, th.Accent, th.Accent, 11, 3)
 		win:_rect(bx + 2, by + 2, size - 4, size - 4, th.AccentSoft, 13, 2)
-		win:_line(bx + 3, by + 6, bx + 5, by + 8.5, th.Text, 1.5, 14)
-		win:_line(bx + 5, by + 8.5, bx + 9, by + 3.5, th.Text, 1.5, 14)
+		local mark = th.AccentText or th.Text
+		win:_line(bx + 3, by + 6, bx + 5, by + 8.5, mark, 1.5, 14)
+		win:_line(bx + 5, by + 8.5, bx + 9, by + 3.5, mark, 1.5, 14)
 	else
 		win:_box(bx, by, size, size, hover and th.ElementHover or th.Element, th.Border, 11, 3)
 	end
@@ -2980,7 +3096,7 @@ function Window:_buildUniversalTab(opts, windowConfig)
 	end
 	interface:AddDropdown({
 		Name = "Font",
-		Options = { "UI", "Plex", "System", "Monospace" },
+		Options = fontNames(),
 		Default = startFont,
 		Flag = "UI_Font",
 		Config = false,
@@ -3103,10 +3219,37 @@ function Window:AddConfigSection(tab, side)
 		Options = window:ListConfigs(),
 	})
 
+	-- Autoload: the chosen config is loaded every time the script starts
+	local function autoloadOptions()
+		local options = { "None" }
+		for _, name in ipairs(window:ListConfigs()) do
+			options[#options + 1] = name
+		end
+		return options
+	end
+	local autoload = section:AddDropdown({
+		Name = "Autoload",
+		Options = autoloadOptions(),
+		Default = "None",
+		Flag = "UI_Autoload",
+		Config = false,
+	})
+	local baseRestore = autoload._restore
+	autoload._restore = function(self, value)
+		baseRestore(self, value)
+		if type(value) == "string" and value ~= "None" and self.Value == value then
+			window._autoloadPending = value -- loaded after every other saved setting is back
+		end
+	end
+
 	local function refresh(select)
 		list:Refresh(window:ListConfigs(), true)
 		if select then
 			list.Value = select
+		end
+		autoload:Refresh(autoloadOptions(), true)
+		if autoload.Value == nil then
+			autoload:Set("None")
 		end
 	end
 
@@ -3158,10 +3301,14 @@ function Window:AddConfigSection(tab, side)
 				return report(false, "Pick a config first")
 			end
 			local new = cleanName(nameBox:Get())
+			local wasAutoload = autoload.Value == name
 			local ok, err = window:RenameConfig(name, new)
 			report(ok, err, "Renamed " .. name .. " to " .. new)
 			if ok then
 				refresh(new)
+				if wasAutoload then
+					autoload:Set(new)
+				end
 			end
 		end,
 	})
