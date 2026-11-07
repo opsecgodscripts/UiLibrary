@@ -38,6 +38,10 @@
 	                                                                    -> :Set(number) :Get()
 	  Section:AddDropdown({ Name, Options, Default, Multi, Flag, Callback })
 	                                                                    -> :Set(value) :Get() :Refresh(options)
+	  Section:AddTextbox({ Name, Default, Placeholder, Numeric, MaxLength, ClearOnFocus, Live, Flag, Callback })
+	                                                                    -> :Set(text) :Get()
+	    Callback(text, submitted) fires on Enter or clicking away (every keystroke if Live = true).
+	    Escape cancels the edit. Needs iskeypressed (Matcha has it).
 
 	Callbacks only fire when the user changes a value or you call :Set(), not when
 	the element is created.
@@ -166,47 +170,12 @@ local function charWidth()
 	if type(Library.CharWidth) == "number" then
 		return Library.CharWidth
 	end
-	-- measured from Matcha screenshots
-	return FONT == FontIds.Monospace and 0.72 or 0.38
-end
-
-local measureCache = {}
-local measurer
-local measureBroken = false
-
-local function measure(text, size)
-	if measureBroken or text == "" then
-		return nil
-	end
-	local key = FONT .. "|" .. size .. "|" .. text
-	local cached = measureCache[key]
-	if cached then
-		return cached
-	end
-	local ok, width = pcall(function()
-		if not measurer then
-			measurer = Drawing.new("Text")
-			measurer.Visible = false
-		end
-		measurer.Font = FONT
-		measurer.Size = size
-		measurer.Text = text
-		return measurer.TextBounds.X
-	end)
-	local n = charCount(text)
-	-- only trust TextBounds when it looks sane for this many characters
-	if ok and type(width) == "number" and width > n * size * 0.2 and width < n * size * 1.0 then
-		measureCache[key] = width
-		return width
-	end
-	if not ok or type(width) ~= "number" then
-		measureBroken = true
-	end
-	return nil
+	-- measured from Matcha screenshots (about 6.5px per character at size 13)
+	return FONT == FontIds.Monospace and 0.72 or 0.5
 end
 
 local function textWidth(text, size)
-	return measure(text, size) or charCount(text) * size * charWidth()
+	return charCount(text) * size * charWidth()
 end
 
 local function fitText(text, maxWidth, size)
@@ -299,6 +268,37 @@ local function resolveKey(key)
 	return { vk = vk, enum = enum, name = name }
 end
 
+--// typing -------------------------------------------------------------------
+-- virtual-key code -> { normal, with shift }
+local TypingKeys = {}
+for c = 0x41, 0x5A do
+	TypingKeys[c] = { string.char(c + 32), string.char(c) }
+end
+local digitShift = { ")", "!", "@", "#", "$", "%", "^", "&", "*", "(" }
+for d = 0, 9 do
+	TypingKeys[0x30 + d] = { tostring(d), digitShift[d + 1] }
+	TypingKeys[0x60 + d] = { tostring(d), tostring(d) } -- numpad
+end
+TypingKeys[0x20] = { " ", " " }
+TypingKeys[0xBA] = { ";", ":" }
+TypingKeys[0xBB] = { "=", "+" }
+TypingKeys[0xBC] = { ",", "<" }
+TypingKeys[0xBD] = { "-", "_" }
+TypingKeys[0xBE] = { ".", ">" }
+TypingKeys[0xBF] = { "/", "?" }
+TypingKeys[0xC0] = { "`", "~" }
+TypingKeys[0xDB] = { "[", "{" }
+TypingKeys[0xDC] = { "\\", "|" }
+TypingKeys[0xDD] = { "]", "}" }
+TypingKeys[0xDE] = { "'", '"' }
+TypingKeys[0x6A] = { "*", "*" }
+TypingKeys[0x6B] = { "+", "+" }
+TypingKeys[0x6D] = { "-", "-" }
+TypingKeys[0x6E] = { ".", "." }
+TypingKeys[0x6F] = { "/", "/" }
+
+local VK_BACK, VK_ENTER, VK_ESCAPE = 0x08, 0x0D, 0x1B
+
 --// input --------------------------------------------------------------------
 local Input = {}
 
@@ -352,6 +352,18 @@ function Input.mousePosition()
 		end
 	end
 	return 0, 0
+end
+
+function Input.vk(code)
+	if type(iskeypressed) == "function" then
+		local ok, down = pcall(iskeypressed, code)
+		return ok and down == true
+	end
+	return false
+end
+
+function Input.shift()
+	return Input.vk(0x10) or Input.vk(0xA0) or Input.vk(0xA1)
 end
 
 function Input.focused()
@@ -422,10 +434,14 @@ function Library:CreateWindow(config)
 
 	-- running the script again replaces the old window instead of stacking a second one
 	local env = (type(getgenv) == "function" and getgenv()) or _G
-	if env.__UiLibraryWindow then
-		pcall(function()
-			env.__UiLibraryWindow:Destroy()
-		end)
+	for _, holder in ipairs({ env, _G, type(shared) == "table" and shared or {} }) do
+		local old = rawget(holder, "__UiLibraryWindow")
+		if old then
+			pcall(function()
+				old:Destroy()
+			end)
+			rawset(holder, "__UiLibraryWindow", nil)
+		end
 	end
 
 	local theme = {}
@@ -440,7 +456,6 @@ function Library:CreateWindow(config)
 
 	if config.Font ~= nil then
 		FONT = FontIds[config.Font] or (type(config.Font) == "number" and config.Font) or FONT
-		measureCache = {}
 	end
 
 	local vw, vh = viewportSize()
@@ -482,11 +497,18 @@ function Library:CreateWindow(config)
 		_dragging = nil,
 		_activeSlider = nil,
 		_openDropdown = nil,
+		_focusedBox = nil,
+		_keyPrev = {},
+		_backHeld = 0,
 		_overlay = nil,
 		_lastError = nil,
 	}, Window)
 
 	env.__UiLibraryWindow = self
+	_G.__UiLibraryWindow = self
+	if type(shared) == "table" then
+		shared.__UiLibraryWindow = self
+	end
 	Library.ActiveWindow = self
 
 	spawnTask(function()
@@ -638,10 +660,20 @@ function Window:_frame()
 	self._prevDown = down
 
 	local keyDown = Input.keyDown(self._toggleKey)
-	if keyDown and not self._prevKey then
+	if keyDown and not self._prevKey and not self._focusedBox then
 		self:Toggle()
 	end
 	self._prevKey = keyDown
+
+	if self._focusedBox then
+		-- a click anywhere except the focused box submits it (the click still goes through)
+		local r = self._focusedBox._rect
+		if self._clicked and (not r or not self:_over(r.x, r.y, r.w, r.h)) then
+			self._focusedBox:_unfocus(true)
+		else
+			self:_type()
+		end
+	end
 
 	if not down then
 		self._dragging = nil
@@ -659,6 +691,54 @@ function Window:_frame()
 	self:_drawNotifications(t)
 
 	self:_hideUnused()
+end
+
+--// typing into the focused textbox -------------------------------------------
+function Window:_pressed(code)
+	local down = Input.vk(code)
+	local was = self._keyPrev[code]
+	self._keyPrev[code] = down
+	return down and not was
+end
+
+function Window:_type()
+	local box = self._focusedBox
+	if not box then
+		return
+	end
+
+	if self:_pressed(VK_ENTER) then
+		box:_unfocus(true)
+		return
+	end
+	if self:_pressed(VK_ESCAPE) then
+		box:_unfocus(false)
+		return
+	end
+
+	-- backspace: once on press, then repeats while held
+	local back = Input.vk(VK_BACK)
+	if back then
+		if self._backHeld == 0 then
+			box:_backspace()
+			self._backHeld = 0.0001
+		else
+			self._backHeld = self._backHeld + self._dt
+			if self._backHeld > 0.4 then
+				box:_backspace()
+				self._backHeld = 0.4 - 0.035
+			end
+		end
+	else
+		self._backHeld = 0
+	end
+
+	local shift = Input.shift()
+	for code, chars in pairs(TypingKeys) do
+		if self:_pressed(code) then
+			box:_insert(shift and chars[2] or chars[1])
+		end
+	end
 end
 
 --// window body --------------------------------------------------------------
@@ -688,13 +768,13 @@ function Window:_tabWidths()
 		local iconW = hasIcon(t.Icon) and textWidth(t.Icon, TEXT) or 0
 		if t == self._currentTab or iconW == 0 then
 			-- selected tab (or tab without icon): icon + name in a pill
-			local w = 20 + textWidth(t.Name, TEXT)
+			local w = 26 + textWidth(t.Name, TEXT)
 			if iconW > 0 then
-				w = w + iconW + 7
+				w = w + iconW + 8
 			end
 			widths[i] = w
 		else
-			widths[i] = math.max(24, iconW + 14)
+			widths[i] = math.max(26, iconW + 16)
 		end
 	end
 	return widths
@@ -742,7 +822,7 @@ function Window:_drawWindow()
 	local title = fitText(self.Title, W * 0.3, TEXT)
 	self:_text(title, titleX, y + 12, th.Text, TEXT, 5)
 	if self.Subtitle ~= "" then
-		local subX = titleX + textWidth(title, TEXT) + 6
+		local subX = titleX + textWidth(title, TEXT) + 10
 		self:_text(fitText(self.Subtitle, W * 0.2, 11), subX, y + 13, th.TextDim, 11, 5)
 	end
 
@@ -752,7 +832,7 @@ function Window:_drawWindow()
 	for _, w in ipairs(widths) do
 		total = total + w + 4
 	end
-	local tx = x + W - 8 - total + 4
+	local tx = x + W - 12 - total + 4
 	local pillY, pillH = y + 5, TOPBAR - 10
 	for i, t in ipairs(self._tabs) do
 		local w = widths[i]
@@ -763,12 +843,12 @@ function Window:_drawWindow()
 		elseif hover then
 			self:_rect(tx, pillY, w, pillH, th.Section, 4, 5)
 		end
-		local cx = tx + 10
+		local cx = tx + 12
 		local textY = pillY + (pillH - TEXT) / 2 - 1
 		if hasIcon(t.Icon) then
 			if selected then
 				self:_text(t.Icon, cx, textY, th.Accent, TEXT, 5)
-				cx = cx + textWidth(t.Icon, TEXT) + 7
+				cx = cx + textWidth(t.Icon, TEXT) + 8
 			else
 				self:_text(t.Icon, tx + w / 2, textY, hover and th.Text or th.TextDim, TEXT, 5, "center")
 			end
@@ -929,6 +1009,9 @@ end
 
 function Window:SelectTab(tab)
 	if tab and tab ~= self._currentTab then
+		if self._focusedBox then
+			self._focusedBox:_unfocus(true)
+		end
 		self._currentTab = tab
 		self._openDropdown = nil
 		self._overlay = nil
@@ -941,6 +1024,9 @@ function Window:Toggle(visible)
 	end
 	self.Visible = visible == true
 	if not self.Visible then
+		if self._focusedBox then
+			self._focusedBox:_unfocus(true)
+		end
 		self._openDropdown = nil
 		self._overlay = nil
 		self._dragging = nil
@@ -1245,8 +1331,10 @@ function Slider:_draw(win, x, y, w)
 
 	if win:_clickIn(x, barY - 4, w, barH + 8) then
 		win._activeSlider = self
+		self._dragX = nil
 	end
-	if win._activeSlider == self and win._down then
+	if win._activeSlider == self and win._down and win._mouseX ~= self._dragX then
+		self._dragX = win._mouseX
 		local pct = clamp((win._mouseX - x) / w, 0, 1)
 		self:Set(self.Min + (self.Max - self.Min) * pct)
 	end
@@ -1287,6 +1375,149 @@ function Slider:Set(value, silent)
 end
 
 function Slider:Get()
+	return self.Value
+end
+
+--// textbox ------------------------------------------------------------------
+local Textbox = {}
+Textbox.__index = Textbox
+
+function Section:AddTextbox(config)
+	config = config or {}
+	local box = self:_add(setmetatable({
+		Text = config.Name or "Textbox",
+		Value = tostring(config.Default or ""),
+		Placeholder = config.Placeholder or "Type here...",
+		Numeric = config.Numeric == true,
+		MaxLength = tonumber(config.MaxLength) or 120,
+		ClearOnFocus = config.ClearOnFocus == true,
+		Live = config.Live == true, -- fire Callback on every keystroke instead of on Enter / click away
+		Flag = config.Flag,
+		Callback = config.Callback,
+	}, Textbox))
+	self:_setFlag(box.Flag, box.Value)
+	return box
+end
+
+function Textbox:_height()
+	return 35
+end
+
+function Textbox:_focus()
+	local win = self.Window
+	if win._focusedBox and win._focusedBox ~= self then
+		win._focusedBox:_unfocus(true)
+	end
+	win._focusedBox = self
+	win._openDropdown = nil
+	self._before = self.Value
+	if self.ClearOnFocus then
+		self.Value = ""
+	end
+	-- ignore keys that are already held when focusing
+	for code in pairs(TypingKeys) do
+		win._keyPrev[code] = Input.vk(code)
+	end
+	win._keyPrev[VK_ENTER] = Input.vk(VK_ENTER)
+	win._keyPrev[VK_ESCAPE] = Input.vk(VK_ESCAPE)
+	win._backHeld = Input.vk(VK_BACK) and 1 or 0
+end
+
+function Textbox:_unfocus(submit)
+	local win = self.Window
+	if win._focusedBox ~= self then
+		return
+	end
+	win._focusedBox = nil
+	if not submit then
+		self.Value = self._before or self.Value -- Escape: undo the edit
+		self.Section:_setFlag(self.Flag, self:Get())
+		return
+	end
+	if self.Numeric and self.Value ~= "" and not tonumber(self.Value) then
+		self.Value = self._before or ""
+	end
+	self.Section:_setFlag(self.Flag, self:Get())
+	if not self.Live then
+		runCallback(self.Callback, self:Get(), true)
+	end
+end
+
+function Textbox:_changed()
+	self.Section:_setFlag(self.Flag, self:Get())
+	if self.Live then
+		runCallback(self.Callback, self:Get(), false)
+	end
+end
+
+function Textbox:_insert(char)
+	if #self.Value >= self.MaxLength then
+		return
+	end
+	if self.Numeric and not char:match("[%d%.%-]") then
+		return
+	end
+	self.Value = self.Value .. char
+	self:_changed()
+end
+
+function Textbox:_backspace()
+	if self.Value == "" then
+		return
+	end
+	self.Value = charSub(self.Value, charCount(self.Value) - 1)
+	self:_changed()
+end
+
+function Textbox:_draw(win, x, y, w)
+	local th = win.Theme
+	local boxY, boxH = y + 15, 20
+	local focused = win._focusedBox == self
+
+	self._rect = { x = x, y = boxY, w = w, h = boxH }
+	if win:_clickIn(x, boxY, w, boxH) and not focused then
+		self:_focus()
+		focused = true
+	end
+
+	win:_text(fitText(self.Text, w, TEXT), x, y, th.Text, TEXT, 12)
+	local hover = win:_over(x, boxY, w, boxH)
+	local fill = (hover or focused) and th.ElementHover or th.Element
+	win:_box(x, boxY, w, boxH, fill, focused and th.Accent or fill, 10, 4)
+
+	local inner = w - 16
+	local textY = boxY + (boxH - SMALL) / 2 - 1
+	if self.Value == "" and not focused then
+		win:_text(fitText(self.Placeholder, inner, SMALL), x + 7, textY, th.TextMuted, SMALL, 12)
+	else
+		-- show the end of the text while typing so the caret stays visible
+		local shown = self.Value
+		if textWidth(shown, SMALL) > inner - 4 then
+			if focused then
+				local keep = math.max(1, math.floor((inner - 4) / (SMALL * charWidth())) - 4)
+				shown = "..." .. shown:sub(-keep)
+			else
+				shown = fitText(shown, inner, SMALL)
+			end
+		end
+		win:_text(shown, x + 7, textY, th.Text, SMALL, 12)
+		if focused and (os.clock() % 1) < 0.55 then
+			local cx = x + 7 + textWidth(shown, SMALL) + 1
+			win:_rect(cx, boxY + 4, 1, boxH - 8, th.Accent, 13)
+		end
+	end
+end
+
+function Textbox:Set(text)
+	self.Value = tostring(text or "")
+	self.Section:_setFlag(self.Flag, self:Get())
+	runCallback(self.Callback, self:Get(), true)
+end
+
+function Textbox:Get()
+	if self.Numeric then
+		return tonumber(self.Value) or self.Value
+	end
 	return self.Value
 end
 

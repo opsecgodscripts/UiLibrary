@@ -186,6 +186,26 @@ Options:AddSlider({
 	Flag = "Speed",
 })
 
+-- Textboxes: Callback fires on Enter or when you click away
+Options:AddTextbox({
+	Name = "Nickname",
+	Placeholder = "Type a name...",
+	Flag = "Nickname",
+	Callback = function(text)
+		Window:Notify("Nickname", "Set to " .. (text ~= "" and text or "(empty)"), 3)
+	end,
+})
+
+Options:AddTextbox({
+	Name = "Walk Speed",
+	Default = "16",
+	Numeric = true,
+	Flag = "WalkSpeedValue",
+	Callback = function(value)
+		print("Number entered:", value)
+	end,
+})
+
 --// Visuals tab --------------------------------------------------------------
 local Look = VisualsTab:CreateSection({ Name = "Look", Side = "Left", Icon = "*" })
 
