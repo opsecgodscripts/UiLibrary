@@ -66,7 +66,9 @@
 	  Window:OpenAnimationTracker()       -- small window that lists animations a character plays
 	    (also a button in the UI tab). Reads animations with Library.AnimationProvider(model)
 	    if set, else memory_read + offsets (Matcha), else GetPlayingAnimationTracks.
-	    Library.TrackerIgnore = { ["id"] = true } hides IDs.
+	    Library.TrackerIgnore = { ["id"] = true } hides IDs; Library.AnimationNames = { ["id"] = "M1" }
+	    shows names. "Show ESP" draws the target's name and distance above its head and its
+	    playing animations (with time) below its feet.
 	  Section:AddList({ Rows, Empty, OnClick }) -> :SetItems({ { Text, Right, Value }, ... })
 	  element:SetVisible(bool) on any element
 
@@ -1164,7 +1166,7 @@ function Window:_rect(x, y, w, h, color, z, corner, alpha)
 end
 
 -- align: "left" (default), "center" or "right" relative to x
-function Window:_text(str, x, y, color, size, z, align, alpha)
+function Window:_text(str, x, y, color, size, z, align, alpha, outline)
 	str = tostring(str or "")
 	if str == "" then
 		return
@@ -1180,7 +1182,7 @@ function Window:_text(str, x, y, color, size, z, align, alpha)
 	o.Size = size
 	o.Font = FONT
 	o.Center = false
-	o.Outline = false
+	o.Outline = outline == true
 	o.Color = color
 	o.Transparency = alpha or 1
 	o.ZIndex = (z or 5) + self._zBase
@@ -1296,6 +1298,7 @@ function Window:_frame()
 	if not down then
 		self._dragging = nil
 		self._activeSlider = nil
+		self._activeScroll = nil
 	end
 
 	self:_updateStats(t)
@@ -1313,6 +1316,13 @@ function Window:_frame()
 		return
 	end
 	self:_drawPerf()
+	if self._onDraw then
+		local ok, err = pcall(self._onDraw, self)
+		if not ok and tostring(err) ~= self._lastDrawError then
+			self._lastDrawError = tostring(err)
+			log("draw hook error:", err)
+		end
+	end
 	if not self.Running then
 		return
 	end
@@ -1798,7 +1808,7 @@ function Window:_drawWindow()
 		self:_drawLogo(x + 12, y + 12)
 	end
 	local titleX = x + 34
-	local title = fitText(self.Title, W * 0.3, TEXT)
+	local title = fitText(self.Title, self._hideTabs and (W - 80) or W * 0.3, TEXT)
 	self:_text(title, titleX, y + 12, th.Text, TEXT, 5)
 	if self.Subtitle ~= "" then
 		local subX = titleX + textWidth(title, TEXT) + 10
@@ -2806,9 +2816,14 @@ function Section:AddList(config)
 end
 
 local LIST_ROW = 18
+local SCROLL_W = 5
 
 function List:_height()
 	return self.Rows * LIST_ROW + 4
+end
+
+function List:_maxScroll()
+	return math.max(0, #self.Items - self.Rows)
 end
 
 function List:_draw(win, x, y, w, h)
@@ -2818,24 +2833,57 @@ function List:_draw(win, x, y, w, h)
 		win:_text(fitText(self.Empty, w - 16, SMALL), x + 8, y + 5, th.TextMuted, SMALL, 12)
 		return
 	end
-	for i = 1, math.min(self.Rows, #self.Items) do
-		local item = self.Items[i]
+	local maxScroll = self:_maxScroll()
+	self.Scroll = clamp(math.floor(self.Scroll or 0), 0, maxScroll)
+	local scrollable = maxScroll > 0
+	local rowW = scrollable and (w - SCROLL_W - 6) or w
+
+	-- scrollbar: drag the thumb or click the track (Matcha has no mouse wheel)
+	if scrollable then
+		local tx, ty, th2 = x + w - SCROLL_W - 3, y + 3, h - 6
+		local thumbH = math.max(14, math.floor(th2 * self.Rows / #self.Items))
+		local thumbY = ty + math.floor((th2 - thumbH) * self.Scroll / maxScroll + 0.5)
+		if win:_clickIn(tx - 3, ty, SCROLL_W + 6, th2) then
+			win._activeScroll = self
+			local onThumb = win._mouseY >= thumbY and win._mouseY <= thumbY + thumbH
+			self._grab = onThumb and (win._mouseY - thumbY) or thumbH / 2
+		end
+		if win._activeScroll == self then
+			if win._down then
+				local pct = clamp((win._mouseY - self._grab - ty) / math.max(1, th2 - thumbH), 0, 1)
+				self.Scroll = math.floor(pct * maxScroll + 0.5)
+				thumbY = ty + math.floor((th2 - thumbH) * self.Scroll / maxScroll + 0.5)
+			else
+				win._activeScroll = nil
+			end
+		end
+		win:_rect(tx, ty, SCROLL_W, th2, th.Section, 11, 2)
+		local active = win._activeScroll == self or win:_over(tx - 3, ty, SCROLL_W + 6, th2)
+		win:_rect(tx, thumbY, SCROLL_W, thumbH, active and th.Accent or th.TextMuted, 12, 2)
+	end
+
+	for i = 1, math.min(self.Rows, #self.Items - self.Scroll) do
+		local item = self.Items[i + self.Scroll]
 		local ry = y + 2 + (i - 1) * LIST_ROW
-		local hover = win:_over(x, ry, w, LIST_ROW)
+		local hover = win:_over(x, ry, rowW, LIST_ROW)
 		if hover then
-			win:_rect(x + 2, ry, w - 4, LIST_ROW, th.ElementHover, 11, 3)
+			win:_rect(x + 2, ry, rowW - 4, LIST_ROW, th.ElementHover, 11, 3)
 		end
 		local right = tostring(item.Right or "")
 		local rightW = right ~= "" and (textWidth(right, SMALL) * FIT_MARGIN + 10) or 0
-		win:_text(fitText(item.Text, w - 16 - rightW, SMALL), x + 8, ry + (LIST_ROW - SMALL) / 2 - 1,
+		win:_text(fitText(item.Text, rowW - 16 - rightW, SMALL), x + 8, ry + (LIST_ROW - SMALL) / 2 - 1,
 			item.Color or th.Text, SMALL, 12)
 		if right ~= "" then
-			win:_text(right, x + w - 8, ry + (LIST_ROW - SMALL) / 2 - 1, th.TextDim, SMALL, 12, "right")
+			win:_text(right, x + rowW - 8, ry + (LIST_ROW - SMALL) / 2 - 1, th.TextDim, SMALL, 12, "right")
 		end
-		if win:_clickIn(x, ry, w, LIST_ROW) then
+		if win:_clickIn(x, ry, rowW, LIST_ROW) then
 			runCallback(self.OnClick, item)
 		end
 	end
+end
+
+function List:ScrollTo(index)
+	self.Scroll = clamp(math.floor(index or 0), 0, self:_maxScroll())
 end
 
 function List:SetItems(items)
@@ -3605,6 +3653,45 @@ function Library.FindByPath(path)
 	return found
 end
 
+-- world -> screen, done by hand from the camera's CFrame (works in Matcha)
+local Cam = {}
+function Cam.update()
+	local cam = prop(workspace, "CurrentCamera")
+	local vp, fov, cf = prop(cam, "ViewportSize"), prop(cam, "FieldOfView"), prop(cam, "CFrame")
+	if not (vp and type(fov) == "number" and cf) then
+		return false
+	end
+	local ok, cx, cy, cz, m00, m01, m02, m10, m11, m12, m20, m21, m22 = pcall(function()
+		return cf:GetComponents()
+	end)
+	if not ok or type(m22) ~= "number" then
+		return false
+	end
+	Cam.cx, Cam.cy, Cam.cz = cx, cy, cz
+	Cam.m00, Cam.m01, Cam.m02 = m00, m01, m02
+	Cam.m10, Cam.m11, Cam.m12 = m10, m11, m12
+	Cam.m20, Cam.m21, Cam.m22 = m20, m21, m22
+	Cam.hw, Cam.hh = vp.X * 0.5, vp.Y * 0.5
+	Cam.focal = Cam.hh / math.tan(math.rad(fov) * 0.5)
+	return true
+end
+
+function Cam.project(x, y, z)
+	local dx, dy, dz = x - Cam.cx, y - Cam.cy, z - Cam.cz
+	local depth = -(Cam.m02 * dx + Cam.m12 * dy + Cam.m22 * dz)
+	if depth < 0.1 then
+		return nil -- behind the camera
+	end
+	local s = Cam.focal / depth
+	return Cam.hw + (Cam.m00 * dx + Cam.m10 * dy + Cam.m20 * dz) * s,
+		Cam.hh - (Cam.m01 * dx + Cam.m11 * dy + Cam.m21 * dz) * s,
+		depth
+end
+
+local function rootPart(model)
+	return child(model, "HumanoidRootPart") or child(model, "Head") or prop(model, "PrimaryPart")
+end
+
 local function copyText(text)
 	for _, name in ipairs({ "setclipboard", "toclipboard", "set_clipboard", "writeclipboard" }) do
 		local fn = rawget(_G, name)
@@ -3655,7 +3742,7 @@ function Window:OpenAnimationTracker()
 	local targetSec = tab:CreateSection({ Name = "Target" })
 	local animSec = tab:CreateSection({ Name = "Animations" })
 
-	local state = { targets = {}, history = {}, printing = false }
+	local state = { targets = {}, history = {}, printing = false, esp = true }
 	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
 
 	local function playerNames()
@@ -3758,6 +3845,9 @@ function Window:OpenAnimationTracker()
 			table.remove(state.history)
 		end
 		refreshList()
+		if (list.Scroll or 0) > 0 then
+			list:ScrollTo(list.Scroll + 1) -- scrolled down: keep the same rows in view
+		end
 		if state.printing then
 			print(string.format("[UiLibrary] %s | %s | %.2fs in", targetName, id, t or 0))
 		end
@@ -3794,6 +3884,14 @@ function Window:OpenAnimationTracker()
 			state.targets = { { name = name, find = find, model = model, seen = {}, lostAt = nil } }
 			updateStatus()
 			tracker:Notify("Tracker", "Tracking " .. name, 2)
+		end,
+	})
+
+	targetSec:AddToggle({
+		Name = "Show ESP",
+		Default = true,
+		Callback = function(on)
+			state.esp = on
 		end,
 	})
 
@@ -3862,7 +3960,9 @@ function Window:OpenAnimationTracker()
 					end
 				else
 					local seenNow = {}
-					for _, anim in ipairs(Library.GetPlayingAnimations(tgt.model)) do
+					local playing = Library.GetPlayingAnimations(tgt.model)
+					tgt.playing = playing
+					for _, anim in ipairs(playing) do
 						local key = anim.Key or anim.Id
 						seenNow[key] = true
 						if not tgt.seen[key] then
@@ -3876,6 +3976,47 @@ function Window:OpenAnimationTracker()
 			waitTask(0.05)
 		end
 	end)
+
+	-- ESP: name + distance above the head, playing animations below the feet
+	tracker._onDraw = function(win)
+		if not state.esp or #state.targets == 0 or not Cam.update() then
+			return
+		end
+		local th = win.Theme
+		local Z = -100 -- under every window (the tracker's z base is 100)
+		local me = Library.FindCharacter(prop(prop(Players, "LocalPlayer"), "Name") or "")
+		local myPos = prop(rootPart(me), "Position")
+		for _, tgt in ipairs(state.targets) do
+			local pos = prop(rootPart(tgt.model), "Position")
+			if pos and prop(tgt.model, "Parent") then
+				local hx, hy = Cam.project(pos.X, pos.Y + 3.4, pos.Z)
+				local fx, fy = Cam.project(pos.X, pos.Y - 3.6, pos.Z)
+				if hx and fx then
+					local label = tgt.name
+					if myPos and tgt.model ~= me then
+						local dx, dy, dz = pos.X - myPos.X, pos.Y - myPos.Y, pos.Z - myPos.Z
+						local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+						label = string.format("%s [%dm]", label, math.floor(d + 0.5))
+					end
+					win:_text(label, hx, hy - 16, th.Accent, 13, Z, "center", 1, true)
+
+					local playing = tgt.playing or {}
+					if #playing == 0 then
+						win:_text("no animations", fx, fy + 4, th.TextMuted, 12, Z, "center", 1, true)
+					end
+					for i = 1, math.min(#playing, 6) do
+						local anim = playing[i]
+						local name = type(Library.AnimationNames) == "table" and Library.AnimationNames[tostring(anim.Id)]
+						local line = string.format("%s  %.2fs", name and (name .. " " .. anim.Id) or tostring(anim.Id), anim.Time or 0)
+						win:_text(line, fx, fy + 4 + (i - 1) * 14, i == 1 and th.Text or th.TextDim, 12, Z, "center", 1, true)
+					end
+					if #playing > 6 then
+						win:_text("+" .. (#playing - 6) .. " more", fx, fy + 4 + 6 * 14, th.TextMuted, 12, Z, "center", 1, true)
+					end
+				end
+			end
+		end
+	end
 
 	tracker.State = state
 	return tracker
