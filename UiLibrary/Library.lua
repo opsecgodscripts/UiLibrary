@@ -54,6 +54,14 @@
 
 	  Window:SetTheme("Tung" | "Default" | table)    Window:SetToggleKey(key)
 
+	Saving
+	  Every element with a Flag is saved to <Folder>/settings.json and restored the next
+	  time the script runs (Folder defaults to the window Title). Pass Save = false on an
+	  element to skip it, or AutoSave = false to CreateWindow to turn this off.
+	  Window:SaveConfig(name) :LoadConfig(name) :RenameConfig(old, new) :DeleteConfig(name)
+	  Window:ListConfigs()     Window:SaveSettings()
+	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete UI
+
 	Callbacks only fire when the user changes a value or you call :Set(), not when
 	the element is created.
 
@@ -306,6 +314,11 @@ for f = 1, 24 do
 	KeyNames[0x6F + f] = "F" .. f
 end
 
+local KeyNameToVk = {}
+for vk, name in pairs(KeyNames) do
+	KeyNameToVk[name:upper()] = vk
+end
+
 local function keyName(vk)
 	return KeyNames[vk] or string.format("0x%X", vk)
 end
@@ -330,7 +343,11 @@ local function resolveKey(key)
 		return resolveKey("RightShift")
 	end
 
-	local vk = VirtualKeys[name]
+	local vk = VirtualKeys[name] or KeyNameToVk[name:upper()]
+	if not vk then
+		local hex = name:match("^0[xX](%x+)$")
+		vk = hex and tonumber(hex, 16)
+	end
 	if not vk then
 		local f = name:match("^[Ff](%d+)$")
 		if f and tonumber(f) >= 1 and tonumber(f) <= 24 then
@@ -470,6 +487,233 @@ local function viewportSize()
 		return size.X, size.Y
 	end
 	return 1920, 1080
+end
+
+--// json (small, so it works without HttpService) ------------------------------
+local Json = {}
+
+local function jsonString(str)
+	return '"' .. str:gsub('[%c"\\]', function(c)
+		local map = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t" }
+		return map[c] or string.format("\\u%04x", c:byte())
+	end) .. '"'
+end
+
+function Json.encode(value)
+	local t = type(value)
+	if t == "string" then
+		return jsonString(value)
+	elseif t == "number" then
+		if value ~= value or value == math.huge or value == -math.huge then
+			return "0"
+		end
+		if value == math.floor(value) and math.abs(value) < 1e15 then
+			return string.format("%d", value)
+		end
+		return string.format("%.14g", value)
+	elseif t == "boolean" then
+		return tostring(value)
+	elseif t == "table" then
+		local n = #value
+		local isArray = true
+		for k in pairs(value) do
+			if type(k) ~= "number" or k < 1 or k > n or k % 1 ~= 0 then
+				isArray = false
+				break
+			end
+		end
+		local parts = {}
+		if isArray then
+			for i = 1, n do
+				parts[i] = Json.encode(value[i])
+			end
+			return "[" .. table.concat(parts, ",") .. "]"
+		end
+		local keys = {}
+		for k in pairs(value) do
+			keys[#keys + 1] = tostring(k)
+		end
+		table.sort(keys)
+		for _, k in ipairs(keys) do
+			local v = value[k]
+			if v == nil then
+				v = value[tonumber(k)]
+			end
+			parts[#parts + 1] = jsonString(k) .. ":" .. Json.encode(v)
+		end
+		return "{" .. table.concat(parts, ",") .. "}"
+	end
+	return "null"
+end
+
+function Json.decode(text)
+	local pos = 1
+	local function skip()
+		pos = text:find("[^ \t\r\n]", pos) or (#text + 1)
+	end
+	local parseValue
+	local function parseString()
+		pos = pos + 1
+		local out = {}
+		while true do
+			local c = text:sub(pos, pos)
+			if c == "" then
+				error("unterminated string")
+			elseif c == '"' then
+				pos = pos + 1
+				break
+			elseif c == "\\" then
+				local e = text:sub(pos + 1, pos + 1)
+				local map = { n = "\n", r = "\r", t = "\t", b = "\b", f = "\f", ["/"] = "/", ["\\"] = "\\", ['"'] = '"' }
+				if e == "u" then
+					local code = tonumber(text:sub(pos + 2, pos + 5), 16) or 63
+					out[#out + 1] = code < 128 and string.char(code) or "?"
+					pos = pos + 6
+				else
+					out[#out + 1] = map[e] or e
+					pos = pos + 2
+				end
+			else
+				out[#out + 1] = c
+				pos = pos + 1
+			end
+		end
+		return table.concat(out)
+	end
+	function parseValue()
+		skip()
+		local c = text:sub(pos, pos)
+		if c == "{" then
+			pos = pos + 1
+			local obj = {}
+			skip()
+			if text:sub(pos, pos) == "}" then
+				pos = pos + 1
+				return obj
+			end
+			while true do
+				skip()
+				local key = parseString()
+				skip()
+				pos = pos + 1 -- :
+				obj[key] = parseValue()
+				skip()
+				local d = text:sub(pos, pos)
+				pos = pos + 1
+				if d == "}" then
+					return obj
+				end
+			end
+		elseif c == "[" then
+			pos = pos + 1
+			local arr = {}
+			skip()
+			if text:sub(pos, pos) == "]" then
+				pos = pos + 1
+				return arr
+			end
+			while true do
+				arr[#arr + 1] = parseValue()
+				skip()
+				local d = text:sub(pos, pos)
+				pos = pos + 1
+				if d == "]" then
+					return arr
+				end
+			end
+		elseif c == '"' then
+			return parseString()
+		elseif text:sub(pos, pos + 3) == "true" then
+			pos = pos + 4
+			return true
+		elseif text:sub(pos, pos + 4) == "false" then
+			pos = pos + 5
+			return false
+		elseif text:sub(pos, pos + 3) == "null" then
+			pos = pos + 4
+			return nil
+		else
+			local num = text:match("^-?%d+%.?%d*[eE]?[-+]?%d*", pos)
+			if not num or num == "" then
+				error("bad json at " .. pos)
+			end
+			pos = pos + #num
+			return tonumber(num)
+		end
+	end
+	local ok, result = pcall(parseValue)
+	if ok then
+		return result
+	end
+	return nil
+end
+
+--// storage: files when the executor has them, otherwise memory ---------------
+-- (memory survives re-executing in the same game session, files survive restarts)
+local Storage = {}
+local memoryFiles
+do
+	local env = (type(getgenv) == "function" and getgenv()) or _G
+	env.__UiLibraryFiles = env.__UiLibraryFiles or {}
+	memoryFiles = env.__UiLibraryFiles
+end
+local hasFiles = type(writefile) == "function" and type(readfile) == "function"
+local warnedNoFiles = false
+
+function Storage.folder(path)
+	if not hasFiles or type(makefolder) ~= "function" then
+		return
+	end
+	pcall(function()
+		if type(isfolder) == "function" and isfolder(path) then
+			return
+		end
+		makefolder(path)
+	end)
+end
+
+function Storage.write(path, content)
+	memoryFiles[path] = content
+	if hasFiles then
+		local ok, err = pcall(writefile, path, content)
+		if ok then
+			return true
+		end
+		log("couldn't write", path, err)
+	elseif not warnedNoFiles then
+		warnedNoFiles = true
+		log("this executor has no writefile: settings are kept until you leave the game")
+	end
+	return false
+end
+
+function Storage.read(path)
+	if hasFiles then
+		local ok, data = pcall(function()
+			if type(isfile) == "function" and not isfile(path) then
+				return nil
+			end
+			return readfile(path)
+		end)
+		if ok and type(data) == "string" and data ~= "" then
+			return data
+		end
+	end
+	return memoryFiles[path]
+end
+
+function Storage.delete(path)
+	memoryFiles[path] = nil
+	if hasFiles and type(delfile) == "function" then
+		pcall(delfile, path)
+	elseif hasFiles then
+		pcall(writefile, path, "")
+	end
+end
+
+local function cleanName(name)
+	name = tostring(name or ""):gsub("[^%w _%-]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+	return name:sub(1, 40)
 end
 
 --// images -------------------------------------------------------------------
@@ -620,6 +864,12 @@ function Library:CreateWindow(config)
 		_openDropdown = nil,
 		_focusedBox = nil,
 		_keybinds = {},
+		_saveables = {},
+		_saveOrder = {},
+		_pendingRestore = {},
+		_dirty = false,
+		_lastChange = 0,
+		_autoSave = config.AutoSave ~= false,
 		_listening = nil,
 		_listenPrev = {},
 		_logoData = nil,
@@ -630,6 +880,18 @@ function Library:CreateWindow(config)
 		_overlay = nil,
 		_lastError = nil,
 	}, Window)
+
+	-- saved settings from the last run (applied to each element as it is created)
+	self.Folder = cleanName(config.Folder or self.Title)
+	if self.Folder == "" then
+		self.Folder = "UiLibrary"
+	end
+	Storage.folder(self.Folder)
+	Storage.folder(self.Folder .. "/configs")
+	self._saved = Json.decode(Storage.read(self.Folder .. "/settings.json") or "") or {}
+	if type(self._saved) ~= "table" then
+		self._saved = {}
+	end
 
 	if config.Logo then
 		loadImage(config.Logo, function(data)
@@ -844,6 +1106,21 @@ function Window:_frame()
 		self._overlay = nil
 	end
 	self:_drawNotifications(t)
+
+	-- restore saved values for elements created since last frame (after the script built them)
+	if #self._pendingRestore > 0 then
+		local pending = self._pendingRestore
+		self._pendingRestore = {}
+		for _, item in ipairs(pending) do
+			local ok, err = pcall(item.element._restore, item.element, item.value)
+			if not ok then
+				log("couldn't restore", item.flag, err)
+			end
+		end
+	end
+	if self._dirty and self._autoSave and t - self._lastChange > 0.5 then
+		self:SaveSettings()
+	end
 
 	self:_hideUnused()
 end
@@ -1267,6 +1544,156 @@ function Window:Toggle(visible)
 	end
 end
 
+--// saving ---------------------------------------------------------------------
+-- every element with a Flag (and Save ~= false) is saved and restored
+function Window:_register(flag, element)
+	if not flag then
+		return
+	end
+	if not self._saveables[flag] then
+		self._saveOrder[#self._saveOrder + 1] = flag
+	end
+	self._saveables[flag] = element
+	local saved = self._saved[flag]
+	if saved ~= nil then
+		self._pendingRestore[#self._pendingRestore + 1] = { flag = flag, element = element, value = saved }
+	end
+end
+
+function Window:_markDirty()
+	self._dirty = true
+	self._lastChange = now()
+end
+
+function Window:_snapshot()
+	local data = {}
+	for _, flag in ipairs(self._saveOrder) do
+		local value = self.Flags[flag]
+		if value ~= nil then
+			data[flag] = value
+		end
+	end
+	return data
+end
+
+function Window:SaveSettings()
+	self._dirty = false
+	-- keep saved values of elements that haven't been created (yet) this run
+	local data = {}
+	for k, v in pairs(self._saved) do
+		data[k] = v
+	end
+	for k, v in pairs(self:_snapshot()) do
+		data[k] = v
+	end
+	self._saved = data
+	Storage.write(self.Folder .. "/settings.json", Json.encode(data))
+end
+
+function Window:_applyValues(data)
+	for _, flag in ipairs(self._saveOrder) do
+		local value = data[flag]
+		if value ~= nil then
+			local element = self._saveables[flag]
+			local ok, err = pcall(element._restore, element, value)
+			if not ok then
+				log("couldn't load", flag, err)
+			end
+		end
+	end
+end
+
+--// configs ----------------------------------------------------------------------
+function Window:_configPath(name)
+	return self.Folder .. "/configs/" .. name .. ".json"
+end
+
+function Window:ListConfigs()
+	local list = Json.decode(Storage.read(self.Folder .. "/configs/index.json") or "") or {}
+	local out = {}
+	for _, name in ipairs(list) do
+		if type(name) == "string" and Storage.read(self:_configPath(name)) then
+			out[#out + 1] = name
+		end
+	end
+	table.sort(out, function(a, b)
+		return a:lower() < b:lower()
+	end)
+	return out
+end
+
+function Window:_writeIndex(list)
+	Storage.write(self.Folder .. "/configs/index.json", Json.encode(list))
+end
+
+function Window:SaveConfig(name)
+	name = cleanName(name)
+	if name == "" then
+		return false, "Enter a config name"
+	end
+	Storage.write(self:_configPath(name), Json.encode(self:_snapshot()))
+	local list = self:ListConfigs()
+	local found = false
+	for _, n in ipairs(list) do
+		if n == name then
+			found = true
+		end
+	end
+	if not found then
+		list[#list + 1] = name
+	end
+	self:_writeIndex(list)
+	return true
+end
+
+function Window:LoadConfig(name)
+	name = cleanName(name)
+	local data = Json.decode(Storage.read(self:_configPath(name)) or "")
+	if type(data) ~= "table" then
+		return false, "Config not found"
+	end
+	self:_applyValues(data)
+	return true
+end
+
+function Window:DeleteConfig(name)
+	name = cleanName(name)
+	Storage.delete(self:_configPath(name))
+	local list = {}
+	for _, n in ipairs(self:ListConfigs()) do
+		if n ~= name then
+			list[#list + 1] = n
+		end
+	end
+	self:_writeIndex(list)
+	return true
+end
+
+function Window:RenameConfig(old, new)
+	old, new = cleanName(old), cleanName(new)
+	if new == "" then
+		return false, "Enter a new name"
+	end
+	local content = Storage.read(self:_configPath(old))
+	if not content then
+		return false, "Config not found"
+	end
+	if old == new then
+		return true
+	end
+	Storage.write(self:_configPath(new), content)
+	Storage.delete(self:_configPath(old))
+	local list = {}
+	for _, n in ipairs(self:ListConfigs()) do
+		if n ~= old and n ~= new then
+			list[#list + 1] = n
+		end
+	end
+	list[#list + 1] = new
+	self:_writeIndex(list)
+	return true
+end
+
 function Window:SetTheme(theme)
 	local new = buildTheme(theme)
 	for k in pairs(self.Theme) do
@@ -1304,6 +1731,9 @@ function Window:Notify(title, text, duration)
 end
 
 function Window:Destroy()
+	if self._dirty and self._autoSave then
+		pcall(self.SaveSettings, self)
+	end
 	self.Running = false
 	for _, list in pairs(self._pool) do
 		for _, object in ipairs(list) do
@@ -1394,9 +1824,16 @@ function Section:_add(element)
 	return element
 end
 
+function Section:_register(element, config)
+	if element.Flag and config.Save ~= false then
+		self.Window:_register(element.Flag, element)
+	end
+end
+
 function Section:_setFlag(flag, value)
 	if flag then
 		self.Window.Flags[flag] = value
+		self.Window:_markDirty()
 	end
 end
 
@@ -1471,13 +1908,16 @@ function Section:AddToggle(config)
 		Callback = config.Callback,
 	}, Toggle))
 	self:_setFlag(toggle.Flag, toggle.Value)
+	self:_register(toggle, config)
 	if config.Keybind ~= nil then
 		-- Keybind = "F" (or "None" to start unbound): pressing it flips the toggle
 		local mode = config.KeybindMode or "Toggle"
 		toggle.Keybind = newKeybind(self.Window, {
 			Default = config.Keybind,
 			Mode = "Hold",
-			Flag = config.KeybindFlag,
+			-- saved as <Flag>Key so a rebound key comes back next time
+			Flag = config.KeybindFlag or (toggle.Flag and toggle.Flag .. "Key"),
+			Save = config.Save,
 			Callback = function(down)
 				if mode == "Hold" then
 					toggle:Set(down)
@@ -1534,6 +1974,12 @@ function Toggle:Get()
 	return self.Value
 end
 
+function Toggle:_restore(value)
+	if type(value) == "boolean" and value ~= self.Value then
+		self:Set(value)
+	end
+end
+
 --// slider -------------------------------------------------------------------
 local Slider = {}
 Slider.__index = Slider
@@ -1565,6 +2011,7 @@ function Section:AddSlider(config)
 	}, Slider))
 	slider.Value = slider:_round(tonumber(config.Default) or min)
 	self:_setFlag(slider.Flag, slider.Value)
+	self:_register(slider, config)
 	return slider
 end
 
@@ -1642,6 +2089,12 @@ function Slider:Get()
 	return self.Value
 end
 
+function Slider:_restore(value)
+	if type(value) == "number" then
+		self:Set(value)
+	end
+end
+
 --// keybind ------------------------------------------------------------------
 -- Modes: "Press" (Callback() on each press), "Toggle" (Callback(on) flips each press),
 -- "Hold" (Callback(true) on press, Callback(false) on release).
@@ -1662,6 +2115,12 @@ function newKeybind(window, config) -- assigns the forward-declared local
 		_prev = true,
 	}, Keybind)
 	window._keybinds[#window._keybinds + 1] = keybind
+	if keybind.Flag then
+		window.Flags[keybind.Flag] = keybind:Get() or "None"
+		if config.Save ~= false then
+			window:_register(keybind.Flag, keybind)
+		end
+	end
 	if keybind.Menu then
 		if keybind.Key then
 			window._toggleKey = keybind.Key
@@ -1725,7 +2184,8 @@ function Keybind:Set(key)
 		self.Window:SetToggleKey(key and key.vk or nil)
 	end
 	if self.Flag then
-		self.Window.Flags[self.Flag] = self:Get()
+		self.Window.Flags[self.Flag] = self:Get() or "None"
+		self.Window:_markDirty()
 	end
 	runCallback(self.ChangedCallback, self:Get())
 end
@@ -1738,6 +2198,15 @@ function Keybind:GetState()
 	return self.State
 end
 
+function Keybind:_restore(value)
+	if type(value) == "string" and value ~= (self:Get() or "None") then
+		if self.Menu and value == "None" then
+			return
+		end
+		self:Set(value)
+	end
+end
+
 -- standalone keybind row
 local KeybindRow = {}
 KeybindRow.__index = KeybindRow
@@ -1746,9 +2215,6 @@ function Section:AddKeybind(config)
 	config = config or {}
 	local row = self:_add(setmetatable({ Text = config.Name or "Keybind" }, KeybindRow))
 	row.Keybind = newKeybind(self.Window, config)
-	if config.Flag then
-		self.Window.Flags[config.Flag] = row.Keybind:Get()
-	end
 	-- expose Set / Get / GetState on the row
 	row.Set = function(_, key)
 		row.Keybind:Set(key)
@@ -1789,8 +2255,17 @@ function Section:AddTextbox(config)
 		Flag = config.Flag,
 		Callback = config.Callback,
 	}, Textbox))
-	self:_setFlag(box.Flag, box.Value)
+	self:_setFlag(box.Flag, box:Get())
+	self:_register(box, config)
 	return box
+end
+
+function Textbox:_restore(value)
+	if type(value) == "string" or type(value) == "number" then
+		if tostring(value) ~= self.Value then
+			self:Set(tostring(value))
+		end
+	end
 end
 
 function Textbox:_height()
@@ -1953,7 +2428,29 @@ function Section:AddDropdown(config)
 		dropdown.Value = config.Default
 	end
 	self:_setFlag(dropdown.Flag, dropdown:Get())
+	self:_register(dropdown, config)
 	return dropdown
+end
+
+function Dropdown:_restore(value)
+	local valid = {}
+	for _, o in ipairs(self._options) do
+		valid[o] = true
+	end
+	if self.Multi then
+		if type(value) ~= "table" then
+			return
+		end
+		local list = {}
+		for _, v in ipairs(value) do
+			if valid[v] then
+				list[#list + 1] = v
+			end
+		end
+		self:Set(list)
+	elseif valid[value] and value ~= self.Value then
+		self:Set(value)
+	end
 end
 
 function Dropdown:_isSelected(option)
@@ -2100,5 +2597,117 @@ pcall(function()
 		getgenv().UiLibrary = Library
 	end
 end)
+
+--==============================================================================
+-- Ready-made config section: Window:AddConfigSection(tab, side)
+--==============================================================================
+function Window:AddConfigSection(tab, side)
+	local window = self
+	local section = tab:CreateSection({ Name = "Configs", Side = side or "Right", Icon = "=" })
+
+	local nameBox = section:AddTextbox({
+		Name = "Config Name",
+		Placeholder = "Name to save / rename to",
+		MaxLength = 40,
+	})
+
+	local list = section:AddDropdown({
+		Name = "Configs",
+		Options = window:ListConfigs(),
+	})
+
+	local function refresh(select)
+		list:Refresh(window:ListConfigs(), true)
+		if select then
+			list.Value = select
+		end
+	end
+
+	local function selected()
+		return list:Get()
+	end
+
+	local function report(ok, err, success)
+		if ok then
+			window:Notify("Configs", success, 3)
+		else
+			window:Notify("Configs", err or "Something went wrong", 3)
+		end
+	end
+
+	section:AddButton({
+		Name = "Save",
+		Callback = function()
+			-- save to the typed name, or overwrite the selected config
+			local name = cleanName(nameBox:Get())
+			if name == "" then
+				name = selected() or ""
+			end
+			local ok, err = window:SaveConfig(name)
+			report(ok, err, "Saved " .. name)
+			if ok then
+				refresh(name)
+			end
+		end,
+	})
+
+	section:AddButton({
+		Name = "Load",
+		Callback = function()
+			local name = selected()
+			if not name then
+				return report(false, "Pick a config first")
+			end
+			local ok, err = window:LoadConfig(name)
+			report(ok, err, "Loaded " .. name)
+		end,
+	})
+
+	section:AddButton({
+		Name = "Rename",
+		Callback = function()
+			local name = selected()
+			if not name then
+				return report(false, "Pick a config first")
+			end
+			local new = cleanName(nameBox:Get())
+			local ok, err = window:RenameConfig(name, new)
+			report(ok, err, "Renamed " .. name .. " to " .. new)
+			if ok then
+				refresh(new)
+			end
+		end,
+	})
+
+	local deleteButton
+	local armed = -math.huge
+	deleteButton = section:AddButton({
+		Name = "Delete",
+		Callback = function()
+			local name = selected()
+			if not name then
+				return report(false, "Pick a config first")
+			end
+			-- press twice within 3 seconds to delete
+			if now() - armed > 3 then
+				armed = now()
+				deleteButton:SetText("Confirm delete")
+				spawnTask(function()
+					waitTask(3)
+					deleteButton:SetText("Delete")
+				end)
+				return
+			end
+			armed = -math.huge
+			deleteButton:SetText("Delete")
+			window:DeleteConfig(name)
+			report(true, nil, "Deleted " .. name)
+			list.Value = nil
+			refresh()
+		end,
+	})
+
+	return section
+end
 
 return Library

@@ -233,26 +233,12 @@ Options:AddTextbox({
 --// Visuals tab --------------------------------------------------------------
 local Look = VisualsTab:CreateSection({ Name = "Look", Side = "Left", Icon = "*" })
 
--- Changing the theme at runtime: everything is redrawn every frame
-local accents = {
-	Pink = Color3.fromRGB(214, 72, 104),
-	Purple = Color3.fromRGB(125, 85, 255),
-	Blue = Color3.fromRGB(70, 130, 240),
-	Green = Color3.fromRGB(70, 190, 120),
-}
-Look:AddDropdown({
-	Name = "Accent Color",
-	Options = { "Pink", "Purple", "Blue", "Green" },
-	Default = "Pink",
-	Callback = function(value)
-		Window.Theme.Accent = accents[value]
-	end,
-})
-
+-- Theme picker: has a Flag, so the choice is saved and comes back next time
 Look:AddDropdown({
 	Name = "Theme",
 	Options = { "Default", "Tung" },
 	Default = "Default",
+	Flag = "Theme",
 	Callback = function(value)
 		Window:SetTheme(value)
 	end,
@@ -281,9 +267,12 @@ Interface:AddKeybind({
 	Name = "Menu Key",
 	Default = "RightShift",
 	Menu = true,
+	Flag = "MenuKey",
 })
 
 Interface:AddLabel("Click a key box, then press a key to rebind. Escape cancels, Backspace clears. Drag the window by the top bar.")
+
+Interface:AddLabel("Anything with a Flag is saved automatically and restored when you run the script again.")
 
 Interface:AddButton({
 	Name = "Hide UI",
@@ -299,6 +288,9 @@ Interface:AddButton({
 		Window:Destroy()
 	end,
 })
+
+-- Save / Load / Rename / Delete configs
+Window:AddConfigSection(SettingsTab, "Right")
 
 -- The footer starts as "Disconnected" with a red dot; this turns it green.
 Window:SetStatus("Connected as " .. playerName, true)
