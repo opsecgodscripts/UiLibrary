@@ -63,6 +63,12 @@
 	  Window:SaveConfig(name) :LoadConfig(name) :RenameConfig(old, new) :DeleteConfig(name)
 	  Window:ListConfigs()     Window:SaveSettings()
 	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete / Autoload UI
+	  Window:OpenAnimationTracker()       -- small window that lists animations a character plays
+	    (also a button in the UI tab). Reads animations with Library.AnimationProvider(model)
+	    if set, else memory_read + offsets (Matcha), else GetPlayingAnimationTracks.
+	    Library.TrackerIgnore = { ["id"] = true } hides IDs.
+	  Section:AddList({ Rows, Empty, OnClick }) -> :SetItems({ { Text, Right, Value }, ... })
+	  element:SetVisible(bool) on any element
 
 	Built-in UI tab
 	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, FPS Cap, Show Performance
@@ -160,6 +166,17 @@ local function log(...)
 		parts[#parts + 1] = tostring((select(i, ...)))
 	end
 	print(table.concat(parts, " "))
+end
+
+-- reads object[name] without erroring
+local function prop(object, name)
+	if object == nil then
+		return nil
+	end
+	local ok, v = pcall(function()
+		return object[name]
+	end)
+	return ok and v or nil
 end
 
 local function runCallback(callback, ...)
@@ -925,13 +942,12 @@ local function readSize(size)
 		return size, 557
 	end
 	local w, h
-	pcall(function()
-		w, h = size.X.Offset, size.Y.Offset -- UDim2
-	end)
-	if type(w) ~= "number" or w <= 0 then
-		pcall(function()
-			w, h = size.X, size.Y -- Vector2 / table
-		end)
+	-- Vector2 / { X = , Y = } first: plain numbers, nothing that can error
+	local x = prop(size, "X")
+	if type(x) == "number" then
+		w, h = x, prop(size, "Y")
+	elseif x ~= nil then
+		w, h = prop(x, "Offset"), prop(prop(size, "Y"), "Offset") -- UDim2
 	end
 	if type(w) ~= "number" or w <= 0 then
 		w = 450
@@ -947,7 +963,7 @@ function Library:CreateWindow(config)
 
 	-- running the script again replaces the old window instead of stacking a second one
 	local env = (type(getgenv) == "function" and getgenv()) or _G
-	for _, holder in ipairs({ env, _G, type(shared) == "table" and shared or {} }) do
+	for _, holder in ipairs(config.Mini and {} or { env, _G, type(shared) == "table" and shared or {} }) do
 		local old = rawget(holder, "__UiLibraryWindow")
 		if old then
 			pcall(function()
@@ -1004,6 +1020,12 @@ function Library:CreateWindow(config)
 		_openDropdown = nil,
 		_focusedBox = nil,
 		_maxFps = tonumber(config.MaxFps),
+		_mini = config.Mini == true,
+		_zBase = config.Mini and 100 or 0,
+		_columns = config.Columns == 1 and 1 or 2,
+		_closable = config.Closable == true,
+		_hideTabs = config.HideTabs == true,
+		_children = {},
 		PerformanceEnabled = false,
 		_perfPos = nil,
 		_perfDrag = nil,
@@ -1036,11 +1058,16 @@ function Library:CreateWindow(config)
 	if self.Folder == "" then
 		self.Folder = "UiLibrary"
 	end
-	Storage.folder(self.Folder)
-	Storage.folder(self.Folder .. "/configs")
-	self._saved = Json.decode(Storage.read(self.Folder .. "/settings.json") or "") or {}
-	if type(self._saved) ~= "table" then
+	if self._mini then
+		self._autoSave = false
 		self._saved = {}
+	else
+		Storage.folder(self.Folder)
+		Storage.folder(self.Folder .. "/configs")
+		self._saved = Json.decode(Storage.read(self.Folder .. "/settings.json") or "") or {}
+		if type(self._saved) ~= "table" then
+			self._saved = {}
+		end
 	end
 
 	if config.Logo then
@@ -1049,16 +1076,20 @@ function Library:CreateWindow(config)
 		end)
 	end
 
-	if config.UniversalTab ~= false then
+	if config.UniversalTab ~= false and not self._mini then
 		self:_buildUniversalTab(type(config.UniversalTab) == "table" and config.UniversalTab or {}, config)
 	end
 
-	env.__UiLibraryWindow = self
-	_G.__UiLibraryWindow = self
-	if type(shared) == "table" then
-		shared.__UiLibraryWindow = self
+	Library._windows = Library._windows or {}
+	table.insert(Library._windows, self)
+	if not self._mini then
+		env.__UiLibraryWindow = self
+		_G.__UiLibraryWindow = self
+		if type(shared) == "table" then
+			shared.__UiLibraryWindow = self
+		end
+		Library.ActiveWindow = self
 	end
-	Library.ActiveWindow = self
 
 	spawnTask(function()
 		while self.Running do
@@ -1121,7 +1152,7 @@ function Window:_rect(x, y, w, h, color, z, corner, alpha)
 	o.Filled = true
 	o.Thickness = 1
 	o.Transparency = alpha or 1
-	o.ZIndex = z or 1
+	o.ZIndex = (z or 1) + self._zBase
 	if self._cornerOk then
 		local ok = pcall(function()
 			o.Corner = corner or 0
@@ -1152,7 +1183,7 @@ function Window:_text(str, x, y, color, size, z, align, alpha)
 	o.Outline = false
 	o.Color = color
 	o.Transparency = alpha or 1
-	o.ZIndex = z or 5
+	o.ZIndex = (z or 5) + self._zBase
 	o.Position = Vector2.new(math.floor(x + 0.5), math.floor(y + 0.5))
 end
 
@@ -1163,7 +1194,7 @@ function Window:_line(x1, y1, x2, y2, color, thickness, z, alpha)
 	o.Color = color
 	o.Thickness = thickness or 1
 	o.Transparency = alpha or 1
-	o.ZIndex = z or 5
+	o.ZIndex = (z or 5) + self._zBase
 end
 
 function Window:_image(data, x, y, w, h, z, rounding)
@@ -1175,7 +1206,7 @@ function Window:_image(data, x, y, w, h, z, rounding)
 	o.Position = Vector2.new(math.floor(x), math.floor(y))
 	o.Size = Vector2.new(w, h)
 	o.Transparency = 1
-	o.ZIndex = z or 5
+	o.ZIndex = (z or 5) + self._zBase
 	pcall(function()
 		o.Rounding = rounding or 0
 	end)
@@ -1190,7 +1221,7 @@ function Window:_circle(x, y, radius, color, z, alpha)
 	o.Thickness = 1
 	o.NumSides = 20
 	o.Transparency = alpha or 1
-	o.ZIndex = z or 5
+	o.ZIndex = (z or 5) + self._zBase
 end
 
 -- 1px border drawn as a slightly larger rect behind the main one
@@ -1235,8 +1266,11 @@ function Window:_frame()
 	self._clicked = down and not self._prevDown
 	self._down = down
 	self._prevDown = down
+	if self._clicked and self:_coveredByHigherWindow() then
+		self._clicked = false
+	end
 
-	local busy = self._focusedBox ~= nil or self._listening ~= nil
+	local busy = Library._anyTyping()
 	local keyDown = self._toggleKey and Input.keyDown(self._toggleKey) or false
 	if keyDown and not self._prevKey and not busy then
 		self:Toggle()
@@ -1310,6 +1344,26 @@ function Window:_frame()
 	end
 
 	self:_hideUnused()
+end
+
+--// several windows ---------------------------------------------------------------
+function Window:_coveredByHigherWindow()
+	for _, other in ipairs(Library._windows or {}) do
+		if other ~= self and other.Running and other.Visible and other._zBase > self._zBase
+			and self:_over(other._x, other._y, other._width, other._height) then
+			return true
+		end
+	end
+	return false
+end
+
+function Library._anyTyping()
+	for _, w in ipairs(Library._windows or {}) do
+		if w.Running and (w._focusedBox or w._listening) then
+			return true
+		end
+	end
+	return false
 end
 
 --// keybinds -------------------------------------------------------------------
@@ -1656,7 +1710,7 @@ function Window:_layoutColumn(tab, side, colW)
 	local total = 0
 	local list = {}
 	for _, section in ipairs(tab._sections) do
-		if section.Side == side then
+		if side == nil or section.Side == side then
 			local h = section:_height(colW)
 			list[#list + 1] = { section = section, h = h }
 			total = total + h + PAD
@@ -1702,13 +1756,16 @@ end
 function Window:_drawWindow()
 	local th = self.Theme
 	local W = self._width
-	local colW = math.floor((W - EDGE * 2 - PAD) / 2)
+	local oneColumn = self._columns == 1
+	local colW = oneColumn and (W - EDGE * 2) or math.floor((W - EDGE * 2 - PAD) / 2)
 	local tab = self._currentTab
 
 	local left, leftH, right, rightH = {}, 0, {}, 0
 	if tab then
-		left, leftH = self:_layoutColumn(tab, "Left", colW)
-		right, rightH = self:_layoutColumn(tab, "Right", colW)
+		left, leftH = self:_layoutColumn(tab, oneColumn and nil or "Left", colW)
+		if not oneColumn then
+			right, rightH = self:_layoutColumn(tab, "Right", colW)
+		end
 	end
 	-- fixed height like the reference; grows only if a tab needs more room
 	local H = math.max(self._minHeight, TOPBAR + EDGE + 1 + math.max(leftH, rightH) + EDGE + FOOTER)
@@ -1748,15 +1805,32 @@ function Window:_drawWindow()
 		self:_text(fitText(self.Subtitle, W * 0.2, 11), subX, y + 13, th.TextDim, 11, 5)
 	end
 
+	-- close button (mini windows)
+	if self._closable then
+		local cs = 20
+		local cx, cy = x + W - cs - 9, y + (TOPBAR - cs) / 2
+		local hover = self:_over(cx, cy, cs, cs)
+		if hover then
+			self:_rect(cx, cy, cs, cs, th.Section, 4, 4)
+		end
+		local col = hover and th.Accent or th.TextDim
+		self:_line(cx + 6, cy + 6, cx + cs - 6, cy + cs - 6, col, 1.5, 5)
+		self:_line(cx + cs - 6, cy + 6, cx + 6, cy + cs - 6, col, 1.5, 5)
+		if self:_clickIn(cx, cy, cs, cs) then
+			self:Destroy()
+			return
+		end
+	end
+
 	-- tabs: right-aligned; the selected one is a dark pill with icon + name
-	local widths = self:_tabWidths()
+	local widths = self._hideTabs and {} or self:_tabWidths()
 	local total = 0
 	for _, w in ipairs(widths) do
 		total = total + w + 4
 	end
 	local tx = x + W - 12 - total + 4
 	local pillY, pillH = y + 5, TOPBAR - 10
-	for i, t in ipairs(self._tabs) do
+	for i, t in ipairs(self._hideTabs and {} or self._tabs) do
 		local w = widths[i]
 		local selected = t == self._currentTab
 		local hover = self:_over(tx, pillY, w, pillH)
@@ -1799,7 +1873,9 @@ function Window:_drawWindow()
 		end
 	end
 	drawColumn(left, x + EDGE)
-	drawColumn(right, x + W - EDGE - colW)
+	if not oneColumn then
+		drawColumn(right, x + W - EDGE - colW)
+	end
 
 	-- footer
 	local fy = y + H - FOOTER
@@ -2172,6 +2248,20 @@ function Window:Notify(title, text, duration)
 end
 
 function Window:Destroy()
+	if not self.Running then
+		return
+	end
+	for _, child in ipairs(self._children) do
+		pcall(child.Destroy, child)
+	end
+	if Library._windows then
+		for i = #Library._windows, 1, -1 do
+			if Library._windows[i] == self then
+				table.remove(Library._windows, i)
+			end
+		end
+	end
+	runCallback(self._onClose)
 	if self._dirty and self._autoSave then
 		pcall(self.SaveSettings, self)
 	end
@@ -2242,7 +2332,9 @@ function Section:_height(colW)
 	local h = SECTION_HEADER + 8
 	local inner = colW - INSET * 2
 	for _, el in ipairs(self._elements) do
-		h = h + el:_height(inner) + ELEMENT_GAP
+		if el.Visible ~= false then
+			h = h + el:_height(inner) + ELEMENT_GAP
+		end
 	end
 	return h + 2
 end
@@ -2260,15 +2352,22 @@ function Section:_draw(win, x, y, w, h)
 	local ey = y + SECTION_HEADER + 8
 	local inner = w - INSET * 2
 	for _, el in ipairs(self._elements) do
-		local eh = el:_height(inner)
-		el:_draw(win, x + INSET, ey, inner, eh)
-		ey = ey + eh + ELEMENT_GAP
+		if el.Visible ~= false then
+			local eh = el:_height(inner)
+			el:_draw(win, x + INSET, ey, inner, eh)
+			ey = ey + eh + ELEMENT_GAP
+		end
 	end
+end
+
+local function setVisible(element, visible)
+	element.Visible = visible ~= false
 end
 
 function Section:_add(element)
 	element.Section = self
 	element.Window = self.Window
+	element.SetVisible = setVisible
 	self._elements[#self._elements + 1] = element
 	return element
 end
@@ -2689,6 +2788,58 @@ function KeybindRow:_draw(win, x, y, w, h)
 	local th = win.Theme
 	local boxW = self.Keybind:_drawBox(win, x + w, y, h)
 	win:_text(fitText(self.Text, w - boxW - 8, TEXT), x, y + (h - TEXT) / 2 - 1, th.Text, TEXT, 12)
+end
+
+--// list ---------------------------------------------------------------------
+-- rows of text; items = { { Text = "left", Right = "right", Value = anything }, ... }
+local List = {}
+List.__index = List
+
+function Section:AddList(config)
+	config = config or {}
+	return self:_add(setmetatable({
+		Rows = tonumber(config.Rows) or 6,
+		Empty = config.Empty or "Nothing yet",
+		OnClick = config.OnClick,
+		Items = {},
+	}, List))
+end
+
+local LIST_ROW = 18
+
+function List:_height()
+	return self.Rows * LIST_ROW + 4
+end
+
+function List:_draw(win, x, y, w, h)
+	local th = win.Theme
+	win:_rect(x, y, w, h, th.Element, 10, 4)
+	if #self.Items == 0 then
+		win:_text(fitText(self.Empty, w - 16, SMALL), x + 8, y + 5, th.TextMuted, SMALL, 12)
+		return
+	end
+	for i = 1, math.min(self.Rows, #self.Items) do
+		local item = self.Items[i]
+		local ry = y + 2 + (i - 1) * LIST_ROW
+		local hover = win:_over(x, ry, w, LIST_ROW)
+		if hover then
+			win:_rect(x + 2, ry, w - 4, LIST_ROW, th.ElementHover, 11, 3)
+		end
+		local right = tostring(item.Right or "")
+		local rightW = right ~= "" and (textWidth(right, SMALL) * FIT_MARGIN + 10) or 0
+		win:_text(fitText(item.Text, w - 16 - rightW, SMALL), x + 8, ry + (LIST_ROW - SMALL) / 2 - 1,
+			item.Color or th.Text, SMALL, 12)
+		if right ~= "" then
+			win:_text(right, x + w - 8, ry + (LIST_ROW - SMALL) / 2 - 1, th.TextDim, SMALL, 12, "right")
+		end
+		if win:_clickIn(x, ry, w, LIST_ROW) then
+			runCallback(self.OnClick, item)
+		end
+	end
+end
+
+function List:SetItems(items)
+	self.Items = items or {}
 end
 
 --// textbox ------------------------------------------------------------------
@@ -3170,6 +3321,13 @@ function Window:_buildUniversalTab(opts, windowConfig)
 	})
 
 	interface:AddButton({
+		Name = "Animation Tracker",
+		Callback = function()
+			window:OpenAnimationTracker()
+		end,
+	})
+
+	interface:AddButton({
 		Name = "Hide UI",
 		Callback = function()
 			window:Toggle(false)
@@ -3199,6 +3357,528 @@ function Window:_buildUniversalTab(opts, windowConfig)
 
 	self:AddConfigSection(tab, "Right")
 	return tab
+end
+
+--==============================================================================
+-- Animation tracker (mini window): Window:OpenAnimationTracker()
+--==============================================================================
+-- Reading what a character is playing. In order:
+--   1. Library.AnimationProvider(model) if a script sets one; return { { Id = "123", Time = 0.4, Key = track }, ... }
+--   2. memory_read + offsets (Matcha), the same way as the Demon://Slayer script
+--   3. Animator:GetPlayingAnimationTracks()
+Library.OffsetsUrl = "https://offsets.imtheo.lol/Offsets.json"
+
+local function toNumber(v)
+	if type(v) == "number" then
+		return v
+	end
+	if type(v) == "string" then
+		return tonumber(v) or tonumber((v:gsub("^0[xX]", "")), 16)
+	end
+	return nil
+end
+
+local Mem = { tried = false, offsets = nil, animCache = {}, animCacheN = 0 }
+
+function Mem.load()
+	if Mem.tried then
+		return Mem.offsets
+	end
+	Mem.tried = true
+	if type(memory_read) ~= "function" then
+		return nil
+	end
+	local ok, body = pcall(function()
+		return game:HttpGet(Library.OffsetsUrl)
+	end)
+	local data = ok and Json.decode(body) or nil
+	local o = type(data) == "table" and data.Offsets or nil
+	if type(o) ~= "table" then
+		log("animation tracker: couldn't download offsets")
+		return nil
+	end
+	local function g(a, b)
+		return type(o[a]) == "table" and toNumber(o[a][b]) or nil
+	end
+	local offsets = {
+		AnimationId = g("Misc", "AnimationId"),
+		ClassDescriptor = g("Instance", "ClassDescriptor"),
+		ClassName = g("Instance", "ClassName"),
+		TimePosition = g("AnimationTrack", "TimePosition") or 0xD8,
+		ActiveAnimations = g("Animator", "ActiveAnimations"),
+		Animation = g("AnimationTrack", "Animation"),
+		NodeNext = 0x10,
+	}
+	for k, v in pairs(offsets) do
+		if type(v) ~= "number" then
+			log("animation tracker: offset missing:", k)
+			return nil
+		end
+	end
+	Mem.offsets = offsets
+	return offsets
+end
+
+local function readPointer(addr)
+	if type(addr) ~= "number" then
+		return nil
+	end
+	local ok, v = pcall(memory_read, "uintptr_t", addr)
+	if ok and type(v) == "number" and v > 4096 then
+		return v
+	end
+	return nil
+end
+
+local function readString(addr)
+	if not addr or addr <= 4096 then
+		return nil
+	end
+	local ok, v = pcall(memory_read, "string", addr)
+	return ok and v or nil
+end
+
+local function findAnimator(model)
+	local holder = child(model, "Humanoid") or child(model, "AnimationController")
+	return child(holder, "Animator")
+end
+
+local function memoryAnimations(model)
+	local o = Mem.load()
+	local animator = o and findAnimator(model)
+	local addr = toNumber(prop(animator, "Address"))
+	if not addr then
+		return nil
+	end
+	local out = {}
+	local head = readPointer(addr + o.ActiveAnimations)
+	if not head then
+		return out
+	end
+	local node, count = readPointer(head), 0
+	while node and node ~= head and count < 50 do
+		count = count + 1
+		local track = readPointer(node + o.NodeNext)
+		local anim = track and readPointer(track + o.Animation)
+		if anim then
+			local id = Mem.animCache[anim]
+			if id == nil then
+				id = false
+				local desc = readPointer(anim + o.ClassDescriptor)
+				if desc and readString(readPointer(desc + o.ClassName)) == "Animation" then
+					local raw = readString(readPointer(anim + o.AnimationId))
+					id = raw and tostring(raw):match("%d+") or false
+				end
+				if Mem.animCacheN > 800 then
+					Mem.animCache, Mem.animCacheN = {}, 0
+				end
+				Mem.animCache[anim] = id
+				Mem.animCacheN = Mem.animCacheN + 1
+			end
+			if id then
+				local ok, t = pcall(memory_read, "float", track + o.TimePosition)
+				local good = ok and type(t) == "number" and t == t and t >= 0 and t < 30
+				out[#out + 1] = { Id = id, Time = good and t or 0, Key = track }
+			end
+		end
+		node = readPointer(node)
+	end
+	return out
+end
+
+local apiBroken = false
+local function apiAnimations(model)
+	if apiBroken then
+		return nil
+	end
+	local animator = findAnimator(model)
+	if not animator then
+		return nil
+	end
+	local ok, tracks = pcall(function()
+		return animator:GetPlayingAnimationTracks()
+	end)
+	if not ok or type(tracks) ~= "table" then
+		apiBroken = true -- don't retry every tick (Matcha prints errors even inside pcall)
+		return nil
+	end
+	local out = {}
+	for _, track in ipairs(tracks) do
+		local animation = prop(track, "Animation")
+		local id = tostring(prop(animation, "AnimationId") or ""):match("%d+")
+		if id then
+			out[#out + 1] = { Id = id, Time = toNumber(prop(track, "TimePosition")) or 0, Key = track }
+		end
+	end
+	return out
+end
+
+function Library.GetPlayingAnimations(model)
+	if type(Library.AnimationProvider) == "function" then
+		local ok, list = pcall(Library.AnimationProvider, model)
+		return ok and type(list) == "table" and list or {}
+	end
+	if type(memory_read) == "function" then
+		local list = memoryAnimations(model)
+		if list then
+			return list
+		end
+	end
+	return apiAnimations(model) or {}
+end
+
+-- finding characters
+local function cleanModelName(name)
+	return (tostring(name or ""):gsub("^%.", ""))
+end
+
+local function hasHumanoid(model)
+	return child(model, "Humanoid") ~= nil or child(model, "AnimationController") ~= nil
+end
+
+-- a player's character, wherever it is in workspace
+function Library.FindCharacter(name)
+	local player = child(Players, name)
+	local character = prop(player, "Character")
+	if character and hasHumanoid(character) then
+		return character
+	end
+	local alive = child(workspace, "Alive")
+	local direct = child(alive, name) or child(alive, "." .. name) or child(workspace, name)
+	if direct and hasHumanoid(direct) then
+		return direct
+	end
+	local ok, all = pcall(function()
+		return workspace:GetDescendants()
+	end)
+	if ok and type(all) == "table" then
+		for _, v in ipairs(all) do
+			local n = prop(v, "Name")
+			if n and cleanModelName(n) == name and hasHumanoid(v) then
+				return v
+			end
+		end
+	end
+	return nil
+end
+
+-- "Alive/NpcName", "workspace.Alive.NpcName" or just "NpcName"
+function Library.FindByPath(path)
+	path = tostring(path or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if path == "" then
+		return nil
+	end
+	local sep = path:find("/") and "[^/]+" or "[^%.]+"
+	local parts = {}
+	for part in path:gmatch(sep) do
+		parts[#parts + 1] = part
+	end
+	local first = (parts[1] or ""):lower()
+	if first == "game" then
+		table.remove(parts, 1)
+		first = (parts[1] or ""):lower()
+	end
+	if first == "workspace" then
+		table.remove(parts, 1)
+	end
+	local function walk(list)
+		local current = workspace
+		for _, part in ipairs(list) do
+			current = child(current, part)
+			if not current then
+				return nil
+			end
+		end
+		return current
+	end
+	local found = walk(parts)
+	if not found then
+		local inAlive = { "Alive" }
+		for _, part in ipairs(parts) do
+			inAlive[#inAlive + 1] = part
+		end
+		found = walk(inAlive)
+	end
+	if not found and #parts == 1 then
+		found = Library.FindCharacter(parts[1])
+	end
+	return found
+end
+
+local function copyText(text)
+	for _, name in ipairs({ "setclipboard", "toclipboard", "set_clipboard", "writeclipboard" }) do
+		local fn = rawget(_G, name)
+		if type(fn) ~= "function" and type(getgenv) == "function" then
+			fn = rawget(getgenv(), name)
+		end
+		if type(fn) ~= "function" and type(getfenv) == "function" then
+			local ok, env = pcall(getfenv, 0)
+			if ok and type(env) == "table" then
+				fn = rawget(env, name)
+			end
+		end
+		if type(fn) == "function" and pcall(fn, text) then
+			return true
+		end
+	end
+	return false
+end
+
+function Window:OpenAnimationTracker()
+	if self._tracker and self._tracker.Running then
+		self._tracker:Destroy() -- the button toggles it
+		return nil
+	end
+	local parent = self
+	local vw = viewportSize()
+	local tracker = Library:CreateWindow({
+		Title = "Animation Tracker",
+		Mini = true,
+		Columns = 1,
+		HideTabs = true,
+		Closable = true,
+		ToggleKey = false,
+		Size = Vector2.new(300, 120),
+	})
+	tracker.Theme = parent.Theme -- same table, so theme changes apply to both
+	tracker._logoData = parent._logoData
+	tracker._x = parent._x + parent._width + 12
+	if tracker._x + 300 > vw then
+		tracker._x = math.max(0, parent._x - 312)
+	end
+	tracker._y = parent._y
+	parent._children[#parent._children + 1] = tracker
+	parent._tracker = tracker
+	tracker:SetStatus("Idle", false)
+
+	local tab = tracker:CreateTab({ Name = "Tracker" })
+	local targetSec = tab:CreateSection({ Name = "Target" })
+	local animSec = tab:CreateSection({ Name = "Animations" })
+
+	local state = { targets = {}, history = {}, printing = false }
+	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
+
+	local function playerNames()
+		local names = {}
+		local ok, players = pcall(function()
+			return Players:GetPlayers()
+		end)
+		if ok and type(players) == "table" then
+			for _, p in ipairs(players) do
+				local n = prop(p, "Name")
+				if n then
+					names[#names + 1] = n
+				end
+			end
+		end
+		table.sort(names, function(a, b)
+			return a:lower() < b:lower()
+		end)
+		return names
+	end
+
+	local function updateVisibility()
+		local kind = typeDd:Get()
+		playerDd:SetVisible(kind == "Player")
+		refreshBtn:SetVisible(kind == "Player")
+		pathBox:SetVisible(kind == "Path")
+	end
+
+	typeDd = targetSec:AddDropdown({
+		Name = "Target Type",
+		Options = { "LocalPlayer", "Player", "Path" },
+		Default = "LocalPlayer",
+		Callback = function()
+			updateVisibility()
+		end,
+	})
+	playerDd = targetSec:AddDropdown({ Name = "Player", Options = playerNames() })
+	refreshBtn = targetSec:AddButton({
+		Name = "Refresh Players",
+		Callback = function()
+			playerDd:Refresh(playerNames(), true)
+		end,
+	})
+	pathBox = targetSec:AddTextbox({ Name = "Path", Placeholder = "Alive/NpcName" })
+
+	-- who to watch right now: returns a function that finds the model again (respawns)
+	local function resolver()
+		local kind = typeDd:Get()
+		if kind == "LocalPlayer" then
+			local name = prop(prop(Players, "LocalPlayer"), "Name") or "You"
+			return name, function()
+				return Library.FindCharacter(name)
+			end
+		elseif kind == "Player" then
+			local name = playerDd:Get()
+			if not name then
+				return nil
+			end
+			return name, function()
+				return Library.FindCharacter(name)
+			end
+		end
+		local path = pathBox:Get()
+		if path == "" then
+			return nil
+		end
+		return path:match("([^/%.]+)$") or path, function()
+			return Library.FindByPath(path)
+		end
+	end
+
+	local function refreshList()
+		local items = {}
+		for i, e in ipairs(state.history) do
+			items[i] = {
+				Text = e.id,
+				Right = string.format("%s x%d", e.target, e.count),
+				Value = e.id,
+			}
+		end
+		list:SetItems(items)
+	end
+
+	local function addHistory(id, targetName, t)
+		if type(Library.TrackerIgnore) == "table" and Library.TrackerIgnore[id] then
+			return
+		end
+		for i, e in ipairs(state.history) do
+			if e.id == id then
+				e.count = e.count + 1
+				e.target = targetName
+				table.remove(state.history, i)
+				table.insert(state.history, 1, e)
+				refreshList()
+				return
+			end
+		end
+		table.insert(state.history, 1, { id = id, count = 1, target = targetName })
+		if #state.history > 50 then
+			table.remove(state.history)
+		end
+		refreshList()
+		if state.printing then
+			print(string.format("[UiLibrary] %s | %s | %.2fs in", targetName, id, t or 0))
+		end
+	end
+
+	local function updateStatus()
+		local names = {}
+		for _, tgt in ipairs(state.targets) do
+			names[#names + 1] = tgt.name
+		end
+		if #names == 0 then
+			tracker:SetStatus("Idle", false)
+		else
+			tracker:SetStatus("Tracking " .. table.concat(names, ", "), true)
+		end
+	end
+
+	trackToggle = targetSec:AddToggle({
+		Name = "Tracking",
+		Default = false,
+		Callback = function(on)
+			if not on then
+				state.targets = {}
+				updateStatus()
+				return
+			end
+			local name, find = resolver()
+			local model = find and find()
+			if not model then
+				tracker:Notify("Tracker", "Target not found: " .. tostring(name or "pick one first"), 3)
+				trackToggle.Value = false
+				return
+			end
+			state.targets = { { name = name, find = find, model = model, seen = {}, lostAt = nil } }
+			updateStatus()
+			tracker:Notify("Tracker", "Tracking " .. name, 2)
+		end,
+	})
+
+	list = animSec:AddList({
+		Rows = 6,
+		Empty = "Turn on Tracking to see animations",
+		OnClick = function(item)
+			if copyText(item.Value) then
+				tracker:Notify("Tracker", "Copied " .. item.Value, 2)
+			else
+				print("[UiLibrary] animation id: " .. item.Value)
+				tracker:Notify("Tracker", item.Value .. " (printed to console)", 3)
+			end
+		end,
+	})
+	animSec:AddToggle({
+		Name = "Print to Console",
+		Default = false,
+		Callback = function(on)
+			state.printing = on
+		end,
+	})
+	animSec:AddButton({
+		Name = "Copy All",
+		Callback = function()
+			local ids = {}
+			for i, e in ipairs(state.history) do
+				ids[i] = e.id
+			end
+			if #ids == 0 then
+				return tracker:Notify("Tracker", "Nothing to copy yet", 2)
+			end
+			local text = table.concat(ids, "\n")
+			if copyText(text) then
+				tracker:Notify("Tracker", "Copied " .. #ids .. " IDs", 2)
+			else
+				print("[UiLibrary] animation ids:\n" .. text)
+				tracker:Notify("Tracker", "Printed " .. #ids .. " IDs to console", 3)
+			end
+		end,
+	})
+	animSec:AddButton({
+		Name = "Clear",
+		Callback = function()
+			state.history = {}
+			for _, tgt in ipairs(state.targets) do
+				tgt.seen = {}
+			end
+			refreshList()
+		end,
+	})
+	updateVisibility()
+
+	-- watch the targets
+	spawnTask(function()
+		while tracker.Running do
+			for _, tgt in ipairs(state.targets) do
+				local parentOk = tgt.model and prop(tgt.model, "Parent") ~= nil
+				if not parentOk then
+					-- died / respawned / streamed out: look for it again every second
+					local t = now()
+					if not tgt.lostAt or t - tgt.lostAt > 1 then
+						tgt.lostAt = t
+						tgt.model = tgt.find()
+						tgt.seen = {}
+					end
+				else
+					local seenNow = {}
+					for _, anim in ipairs(Library.GetPlayingAnimations(tgt.model)) do
+						local key = anim.Key or anim.Id
+						seenNow[key] = true
+						if not tgt.seen[key] then
+							tgt.seen[key] = true
+							addHistory(tostring(anim.Id), tgt.name, anim.Time)
+						end
+					end
+					tgt.seen = seenNow
+				end
+			end
+			waitTask(0.05)
+		end
+	end)
+
+	tracker.State = state
+	return tracker
 end
 
 --==============================================================================
