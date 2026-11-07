@@ -1049,6 +1049,7 @@ function Library:CreateWindow(config)
 		_logoData = nil,
 		_logoSupported = true,
 		_imageData = setmetatable({}, { __mode = "k" }),
+		_props = setmetatable({}, { __mode = "k" }),
 		_keyPrev = {},
 		_backHeld = 0,
 		_overlay = nil,
@@ -1118,9 +1119,12 @@ local deadObject = setmetatable({}, { __newindex = function() end, __index = fun
 	return function() end
 end })
 
+-- Every Drawing property write is remembered per object and skipped when the value
+-- hasn't changed. Writes are the expensive part in Matcha, and an idle menu changes
+-- almost nothing between frames, so this keeps the UI from slowing other loops (ESP).
 function Window:_get(kind)
 	if not self.Running then
-		return deadObject
+		return deadObject, {}
 	end
 	local used = self._used[kind] + 1
 	self._used[kind] = used
@@ -1128,16 +1132,41 @@ function Window:_get(kind)
 	if not object then
 		object = Drawing.new(kind)
 		self._pool[kind][used] = object
+		self._props[object] = {}
 	end
-	object.Visible = true
-	return object
+	local c = self._props[object]
+	if c.Visible ~= true then
+		c.Visible = true
+		object.Visible = true
+	end
+	return object, c
+end
+
+local function setProp(o, c, key, value)
+	if c[key] ~= value then
+		c[key] = value
+		o[key] = value
+	end
+end
+
+local function setVec(o, c, key, x, y)
+	local kx, ky = key .. "X", key .. "Y"
+	if c[kx] ~= x or c[ky] ~= y then
+		c[kx], c[ky] = x, y
+		o[key] = Vector2.new(x, y)
+	end
 end
 
 function Window:_hideUnused()
 	for kind, list in pairs(self._pool) do
 		for i = self._used[kind] + 1, #list do
-			if list[i].Visible then
-				list[i].Visible = false
+			local o = list[i]
+			local c = self._props[o]
+			if not c or c.Visible ~= false then
+				if c then
+					c.Visible = false
+				end
+				o.Visible = false
 			end
 		end
 	end
@@ -1147,19 +1176,21 @@ function Window:_rect(x, y, w, h, color, z, corner, alpha)
 	if w <= 0 or h <= 0 then
 		return
 	end
-	local o = self:_get("Square")
-	o.Position = Vector2.new(math.floor(x), math.floor(y))
-	o.Size = Vector2.new(math.floor(w), math.floor(h))
-	o.Color = color
-	o.Filled = true
-	o.Thickness = 1
-	o.Transparency = alpha or 1
-	o.ZIndex = (z or 1) + self._zBase
-	if self._cornerOk then
+	local o, c = self:_get("Square")
+	setVec(o, c, "Position", math.floor(x), math.floor(y))
+	setVec(o, c, "Size", math.floor(w), math.floor(h))
+	setProp(o, c, "Color", color)
+	setProp(o, c, "Filled", true)
+	setProp(o, c, "Thickness", 1)
+	setProp(o, c, "Transparency", alpha or 1)
+	setProp(o, c, "ZIndex", (z or 1) + self._zBase)
+	if self._cornerOk and c.Corner ~= (corner or 0) then
 		local ok = pcall(function()
 			o.Corner = corner or 0
 		end)
-		if not ok then
+		if ok then
+			c.Corner = corner or 0
+		else
 			self._cornerOk = false
 		end
 	end
@@ -1172,58 +1203,61 @@ function Window:_text(str, x, y, color, size, z, align, alpha, outline)
 		return
 	end
 	size = size or 13
-	local o = self:_get("Text")
+	local o, c = self:_get("Text")
 	if align == "center" then
 		x = x - textWidth(str, size) / 2
 	elseif align == "right" then
 		x = x - textWidth(str, size)
 	end
-	o.Text = str
-	o.Size = size
-	o.Font = FONT
-	o.Center = false
-	o.Outline = outline == true
-	o.Color = color
-	o.Transparency = alpha or 1
-	o.ZIndex = (z or 5) + self._zBase
-	o.Position = Vector2.new(math.floor(x + 0.5), math.floor(y + 0.5))
+	setProp(o, c, "Text", str)
+	setProp(o, c, "Size", size)
+	setProp(o, c, "Font", FONT)
+	setProp(o, c, "Center", false)
+	setProp(o, c, "Outline", outline == true)
+	setProp(o, c, "Color", color)
+	setProp(o, c, "Transparency", alpha or 1)
+	setProp(o, c, "ZIndex", (z or 5) + self._zBase)
+	setVec(o, c, "Position", math.floor(x + 0.5), math.floor(y + 0.5))
 end
 
 function Window:_line(x1, y1, x2, y2, color, thickness, z, alpha)
-	local o = self:_get("Line")
-	o.From = Vector2.new(x1, y1)
-	o.To = Vector2.new(x2, y2)
-	o.Color = color
-	o.Thickness = thickness or 1
-	o.Transparency = alpha or 1
-	o.ZIndex = (z or 5) + self._zBase
+	local o, c = self:_get("Line")
+	setVec(o, c, "From", x1, y1)
+	setVec(o, c, "To", x2, y2)
+	setProp(o, c, "Color", color)
+	setProp(o, c, "Thickness", thickness or 1)
+	setProp(o, c, "Transparency", alpha or 1)
+	setProp(o, c, "ZIndex", (z or 5) + self._zBase)
 end
 
 function Window:_image(data, x, y, w, h, z, rounding)
-	local o = self:_get("Image")
-	if self._imageData[o] ~= data then
+	local o, c = self:_get("Image")
+	if c.Data ~= data then
 		o.Data = data
-		self._imageData[o] = data
+		c.Data = data
 	end
-	o.Position = Vector2.new(math.floor(x), math.floor(y))
-	o.Size = Vector2.new(w, h)
-	o.Transparency = 1
-	o.ZIndex = (z or 5) + self._zBase
-	pcall(function()
-		o.Rounding = rounding or 0
-	end)
+	setVec(o, c, "Position", math.floor(x), math.floor(y))
+	setVec(o, c, "Size", w, h)
+	setProp(o, c, "Transparency", 1)
+	setProp(o, c, "ZIndex", (z or 5) + self._zBase)
+	if c.Rounding ~= (rounding or 0) then
+		c.Rounding = rounding or 0
+		pcall(function()
+			o.Rounding = rounding or 0
+		end)
+	end
 end
 
 function Window:_circle(x, y, radius, color, z, alpha)
-	local o = self:_get("Circle")
-	o.Position = Vector2.new(x, y)
-	o.Radius = radius
-	o.Color = color
-	o.Filled = true
-	o.Thickness = 1
-	o.NumSides = 20
-	o.Transparency = alpha or 1
-	o.ZIndex = (z or 5) + self._zBase
+	local o, c = self:_get("Circle")
+	setVec(o, c, "Position", x, y)
+	setProp(o, c, "Radius", radius)
+	setProp(o, c, "Color", color)
+	setProp(o, c, "Filled", true)
+	setProp(o, c, "Thickness", 1)
+	setProp(o, c, "NumSides", 20)
+	setProp(o, c, "Transparency", alpha or 1)
+	setProp(o, c, "ZIndex", (z or 5) + self._zBase)
 end
 
 -- 1px border drawn as a slightly larger rect behind the main one
@@ -2293,6 +2327,7 @@ function Window:Destroy()
 		end
 	end
 	self._pool = { Square = {}, Text = {}, Circle = {}, Line = {}, Image = {} }
+	self._props = setmetatable({}, { __mode = "k" })
 	local env = (type(getgenv) == "function" and getgenv()) or _G
 	for _, holder in ipairs({ env, _G, type(shared) == "table" and shared or {} }) do
 		if rawget(holder, "__UiLibraryWindow") == self then
@@ -4093,11 +4128,22 @@ function Window:OpenAnimationTracker()
 				place(t, str, x, y, color, size)
 			end
 		end
-		local me = Library.FindCharacter(prop(prop(Players, "LocalPlayer"), "Name") or "")
-		local myPos = prop(rootPart(me), "Position")
+		-- parts are looked up once and reused; only positions are read every frame
+		local t = now()
+		if not state.myRoot or t > (state.myRootAt or 0) then
+			state.me = Library.FindCharacter(prop(prop(Players, "LocalPlayer"), "Name") or "")
+			state.myRoot = rootPart(state.me)
+			state.myRootAt = t + 1
+		end
+		local me = state.me
+		local myPos = prop(state.myRoot, "Position")
 		for _, tgt in ipairs(state.targets) do
-			local pos = prop(rootPart(tgt.model), "Position")
-			if pos and prop(tgt.model, "Parent") then
+			if tgt.partModel ~= tgt.model or not tgt.part then
+				tgt.partModel = tgt.model
+				tgt.part = rootPart(tgt.model)
+			end
+			local pos = prop(tgt.part, "Position")
+			if pos then
 				local hx, hy = Cam.project(pos.X, pos.Y + 3.4, pos.Z)
 				local fx, fy = Cam.project(pos.X, pos.Y - 3.6, pos.Z)
 				if hx and fx then
