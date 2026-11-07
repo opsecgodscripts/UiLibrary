@@ -51,7 +51,6 @@ local Window = Library:CreateWindow({
 	Title = "Niph",
 	Subtitle = "Demo",
 	ToggleKey = "RightShift", -- or "Insert", "F1", "K", or a virtual-key number like 0xA1
-	Size = 470,              -- width; height fits the content
 	Font = "UI",             -- "UI", "Plex", "System" or "Monospace"
 })
 
