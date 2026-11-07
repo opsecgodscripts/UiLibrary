@@ -70,10 +70,10 @@ end
 
 local MainTab = Window:CreateTab({ Name = "Main", Icon = ">" })
 local VisualsTab = Window:CreateTab({ Name = "Visuals", Icon = "*" })
-local SettingsTab = Window:CreateTab({ Name = "Settings", Icon = "#" })
+local MiscTab = Window:CreateTab({ Name = "Misc", Icon = "#" })
 
 --// Main tab: left section -----------------------------------------------------
-local General = MainTab:CreateSection({ Name = "General", Side = "Left", Icon = "+" })
+local General = MainTab:CreateSection({ Name = "General", Side = "Left" })
 
 -- Toggle: FPS counter in the footer
 General:AddToggle({
@@ -157,7 +157,7 @@ General:AddKeybind({
 })
 
 --// Main tab: right section ----------------------------------------------------
-local Options = MainTab:CreateSection({ Name = "Options", Side = "Right", Icon = "+" })
+local Options = MainTab:CreateSection({ Name = "Options", Side = "Right" })
 
 Options:AddToggle({
 	Name = "Enable Options",
@@ -242,7 +242,7 @@ Options:AddTextbox({
 })
 
 --// Visuals tab --------------------------------------------------------------
-local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Left", Icon = "*" })
+local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Left" })
 local counterLabel = Info:AddLabel("Button pressed 0 times")
 local presses = 0
 local counterButton
@@ -255,13 +255,13 @@ counterButton = Info:AddButton({
 	end,
 })
 
-local Help = VisualsTab:CreateSection({ Name = "Tips", Side = "Right", Icon = "*" })
-Help:AddLabel("Theme, font, menu key, notifications and configs are in the UI tab (@), which every script gets automatically.")
+local Help = VisualsTab:CreateSection({ Name = "Tips", Side = "Right" })
+Help:AddLabel("Theme, font, menu key, performance bar, notifications and configs are in the UI tab (@), which every script gets automatically.")
 Help:AddLabel("Click a key box, then press a key to rebind. Escape cancels, Backspace clears.")
 Help:AddLabel("Anything with a Flag is saved and comes back when you run the script again.")
 
---// Settings tab: settings for this script (the UI tab has the ones every script shares)
-local ScriptSettings = SettingsTab:CreateSection({ Name = "Script", Side = "Left", Icon = "#" })
+--// Misc tab: settings for this script (the UI tab has the ones every script shares)
+local ScriptSettings = MiscTab:CreateSection({ Name = "Script", Side = "Left" })
 
 ScriptSettings:AddSlider({
 	Name = "Notification Time",
@@ -285,7 +285,7 @@ ScriptSettings:AddButton({
 	end,
 })
 
-local About = SettingsTab:CreateSection({ Name = "About", Side = "Right", Icon = "#" })
+local About = MiscTab:CreateSection({ Name = "About", Side = "Right" })
 About:AddLabel("Settings here belong to this script. Theme, font, menu key and configs are in the UI tab.")
 
 -- The footer starts as "Disconnected" with a red dot; this turns it green.

@@ -31,7 +31,7 @@
 	    Window:Destroy()
 	    Window.Flags[flag]                          -- current value of every flagged element
 
-	  Tab:CreateSection({ Name, Side = "Left" | "Right", Icon }) -> Section
+	  Tab:CreateSection({ Name, Side = "Left" | "Right" }) -> Section
 	  Tab:Select()
 
 	  Section:AddToggle({ Name, Default, Flag, Callback })              -> :Set(bool) :Get()
@@ -63,7 +63,8 @@
 	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete UI
 
 	Built-in UI tab
-	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, Notifications,
+	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, Show Performance
+	  (a "Title | fps | ping" bar, draggable while the UI is open), Notifications,
 	  Hide UI, Unload and Configs. These are saved between runs but not stored in
 	  configs. CreateWindow options: UniversalTab = false to leave it out, or
 	  UniversalTab = { Name = "Settings", Icon = "@" }; OnUnload = function() end
@@ -155,11 +156,12 @@ end
 
 --// theme --------------------------------------------------------------------
 local DefaultTheme = {
-	Background = Color3.fromRGB(11, 11, 15),
+	Background = Color3.fromRGB(12, 11, 16),
 	Topbar = Color3.fromRGB(23, 23, 28),
 	TabActive = Color3.fromRGB(7, 8, 12),
 	Footer = Color3.fromRGB(25, 24, 30),
-	Section = Color3.fromRGB(17, 17, 22),
+	Section = Color3.fromRGB(16, 16, 20),
+	SectionHeader = Color3.fromRGB(23, 23, 28),
 	Element = Color3.fromRGB(28, 28, 32),
 	ElementHover = Color3.fromRGB(36, 36, 41),
 	Border = Color3.fromRGB(28, 28, 33),
@@ -181,7 +183,8 @@ Library.Themes = {
 		Topbar = Color3.fromRGB(36, 24, 15),
 		TabActive = Color3.fromRGB(12, 8, 5),
 		Footer = Color3.fromRGB(38, 25, 16),
-		Section = Color3.fromRGB(27, 18, 12),
+		Section = Color3.fromRGB(26, 17, 11),
+		SectionHeader = Color3.fromRGB(40, 27, 17),
 		Element = Color3.fromRGB(46, 31, 20),
 		ElementHover = Color3.fromRGB(60, 40, 26),
 		Border = Color3.fromRGB(54, 37, 24),
@@ -789,7 +792,7 @@ local TOPBAR = 38
 local FOOTER = 20
 local EDGE = 10 -- space between window edge and sections
 local PAD = 10 -- space between columns and between stacked sections
-local SECTION_HEADER = 32
+local SECTION_HEADER = 28
 local ELEMENT_GAP = 10
 local INSET = 12 -- space inside a section, left and right
 local LABEL_GAP = 19 -- label top to its box / bar
@@ -893,6 +896,15 @@ function Library:CreateWindow(config)
 		_activeSlider = nil,
 		_openDropdown = nil,
 		_focusedBox = nil,
+		PerformanceEnabled = false,
+		_perfPos = nil,
+		_perfDrag = nil,
+		_perfRect = nil,
+		_fps = 0,
+		_ping = nil,
+		_statsNext = 0,
+		_loopFrames = 0,
+		_loopStart = now(),
 		_keybinds = {},
 		_saveables = {},
 		_saveOrder = {},
@@ -1139,14 +1151,21 @@ function Window:_frame()
 		self._activeSlider = nil
 	end
 
+	self:_updateStats(t)
 	if self.Visible then
+		self:_perfInput() -- the performance bar sits on top, so it gets clicks first
 		self:_handleOverlayClick()
 		self:_drawWindow()
 		self:_drawOverlay()
 	else
 		self._openDropdown = nil
 		self._overlay = nil
+		self._perfDrag = nil
 	end
+	if not self.Running then
+		return
+	end
+	self:_drawPerf()
 	if not self.Running then
 		return
 	end
@@ -1283,6 +1302,148 @@ function Window:_type()
 	for code, chars in pairs(TypingKeys) do
 		if self:_pressed(code) then
 			box:_insert(shift and chars[2] or chars[1])
+		end
+	end
+end
+
+--// performance bar ------------------------------------------------------------
+-- "Title | 240 fps | 45 ms": bottom-middle by default, draggable while the UI is open,
+-- visible even when the UI is hidden.
+local Stats
+pcall(function()
+	Stats = game:GetService("Stats")
+end)
+
+local function readFps()
+	if type(getfps) == "function" then
+		local ok, v = pcall(getfps)
+		if ok and type(v) == "number" and v > 0 then
+			return v
+		end
+	end
+	local ok, v = pcall(function()
+		return workspace:GetRealPhysicsFPS()
+	end)
+	if ok and type(v) == "number" and v > 0 then
+		return v
+	end
+	return nil
+end
+
+local function readPing()
+	local ok, v = pcall(function()
+		return Players.LocalPlayer:GetNetworkPing() * 1000
+	end)
+	if ok and type(v) == "number" and v > 0 then
+		return v
+	end
+	ok, v = pcall(function()
+		return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+	end)
+	if ok and type(v) == "number" and v > 0 then
+		return v
+	end
+	return nil
+end
+
+function Window:_updateStats(t)
+	self._loopFrames = self._loopFrames + 1
+	if t < self._statsNext then
+		return
+	end
+	local elapsed = t - self._loopStart
+	local loopFps = elapsed > 0 and self._loopFrames / elapsed or 0
+	self._loopFrames, self._loopStart = 0, t
+	self._statsNext = t + 0.5
+	if not self.PerformanceEnabled then
+		return
+	end
+	-- the game's FPS when the executor can read it, otherwise how fast the UI redraws
+	self._fps = readFps() or loopFps
+	self._ping = readPing()
+end
+
+function Window:_perfParts()
+	local ping = self._ping and (math.floor(self._ping + 0.5) .. " ms") or "-- ms"
+	return { self.Title, string.format("%d fps", math.floor(self._fps + 0.5)), ping }
+end
+
+function Window:_perfSize()
+	local parts = self:_perfParts()
+	local w = 10 + 18 + 6
+	for i, part in ipairs(parts) do
+		w = w + textWidth(part, SMALL) * FIT_MARGIN
+		if i < #parts then
+			w = w + 16 -- " | "
+		end
+	end
+	return math.floor(w + 10), 26
+end
+
+function Window:_perfPosition(w, h)
+	local vw, vh = viewportSize()
+	local x, y
+	if self._perfPos then
+		x, y = self._perfPos.X, self._perfPos.Y
+	else
+		x, y = vw / 2 - w / 2, vh - h - 24
+	end
+	return clamp(x, 0, math.max(0, vw - w)), clamp(y, 0, math.max(0, vh - h))
+end
+
+function Window:_perfInput()
+	if not self.PerformanceEnabled then
+		self._perfDrag = nil
+		return
+	end
+	local w, h = self:_perfSize()
+	local x, y = self:_perfPosition(w, h)
+	if self:_clickIn(x, y, w, h) then
+		self._perfDrag = Vector2.new(self._mouseX - x, self._mouseY - y)
+	end
+	if self._perfDrag then
+		if self._down then
+			self._perfPos = Vector2.new(self._mouseX - self._perfDrag.X, self._mouseY - self._perfDrag.Y)
+		else
+			self._perfDrag = nil
+			local px, py = self:_perfPosition(w, h)
+			self.Flags.UI_PerfPos = { math.floor(px), math.floor(py) }
+			self:_markDirty()
+		end
+	end
+end
+
+function Window:_drawPerf()
+	if not self.PerformanceEnabled then
+		return
+	end
+	local th = self.Theme
+	local w, h = self:_perfSize()
+	local x, y = self:_perfPosition(w, h)
+	local dragging = self._perfDrag ~= nil
+	self:_box(x, y, w, h, th.Background, dragging and th.Accent or th.Border, 55, 5)
+
+	-- logo
+	local drewImage = false
+	if self._logoData and self._logoSupported then
+		drewImage = pcall(self._image, self, self._logoData, x + 9, y + 4, 18, 18, 57, 3)
+	end
+	if not drewImage then
+		local a = th.Accent
+		local lx, ly = x + 10, y + 8
+		self:_line(lx, ly, lx + 6, ly + 9, a, 2.5, 57)
+		self:_line(lx + 6, ly + 9, lx + 13, ly, a, 2.5, 57)
+	end
+
+	local tx = x + 10 + 18 + 6
+	local ty = y + (h - SMALL) / 2 - 1
+	local parts = self:_perfParts()
+	for i, part in ipairs(parts) do
+		self:_text(part, tx, ty, i == 1 and th.Text or th.TextDim, SMALL, 57)
+		tx = tx + textWidth(part, SMALL) * FIT_MARGIN
+		if i < #parts then
+			self:_text("|", tx + 5, ty, th.TextMuted, SMALL, 57)
+			tx = tx + 16
 		end
 	end
 end
@@ -1860,7 +2021,7 @@ function Tab:CreateSection(config)
 end
 
 function Section:_height(colW)
-	local h = SECTION_HEADER + 6
+	local h = SECTION_HEADER + 8
 	local inner = colW - INSET * 2
 	for _, el in ipairs(self._elements) do
 		h = h + el:_height(inner) + ELEMENT_GAP
@@ -1870,17 +2031,15 @@ end
 
 function Section:_draw(win, x, y, w, h)
 	local th = win.Theme
-	win:_box(x, y, w, h, th.Section, th.Border, 6, 4)
+	-- body, then a lighter header strip across the top
+	win:_rect(x, y, w, h, th.Section, 6, 4)
+	win:_rect(x, y, w, SECTION_HEADER, th.SectionHeader or th.Element, 7, 4)
+	win:_rect(x, y + SECTION_HEADER - 4, w, 4, th.SectionHeader or th.Element, 7)
 
-	local tx = x + INSET
 	local ty = y + (SECTION_HEADER - TEXT) / 2
-	if hasIcon(self.Icon) then
-		win:_text(self.Icon, tx, ty, th.Accent, TEXT, 9)
-		tx = tx + textWidth(self.Icon, TEXT) + 9
-	end
-	win:_text(fitText(self.Name, x + w - 10 - tx, TEXT), tx, ty, th.Text, TEXT, 9)
+	win:_text(fitText(self.Name, w - INSET * 2, TEXT), x + INSET, ty, th.Text, TEXT, 9)
 
-	local ey = y + SECTION_HEADER + 6
+	local ey = y + SECTION_HEADER + 8
 	local inner = w - INSET * 2
 	for _, el in ipairs(self._elements) do
 		local eh = el:_height(inner)
@@ -2684,7 +2843,7 @@ function Window:_buildUniversalTab(opts, windowConfig)
 	self._universalTab = tab
 	self.UniversalTab = tab
 
-	local interface = tab:CreateSection({ Name = "Interface", Side = "Left", Icon = "@" })
+	local interface = tab:CreateSection({ Name = "Interface", Side = "Left" })
 
 	local themeNames = { "Default" }
 	for name in pairs(Library.Themes) do
@@ -2736,6 +2895,28 @@ function Window:_buildUniversalTab(opts, windowConfig)
 	})
 
 	interface:AddToggle({
+		Name = "Show Performance",
+		Default = false,
+		Flag = "UI_Performance",
+		Config = false,
+		Callback = function(on)
+			window.PerformanceEnabled = on
+			window._statsNext = 0
+		end,
+	})
+
+	-- remembers where the performance bar was dragged to
+	window:_register("UI_PerfPos", {
+		_noConfig = true,
+		_restore = function(_, value)
+			if type(value) == "table" and type(value[1]) == "number" and type(value[2]) == "number" then
+				window._perfPos = Vector2.new(value[1], value[2])
+				window.Flags.UI_PerfPos = { value[1], value[2] }
+			end
+		end,
+	})
+
+	interface:AddToggle({
 		Name = "Notifications",
 		Default = true,
 		Flag = "UI_Notifications",
@@ -2782,7 +2963,7 @@ end
 --==============================================================================
 function Window:AddConfigSection(tab, side)
 	local window = self
-	local section = tab:CreateSection({ Name = "Configs", Side = side or "Right", Icon = "=" })
+	local section = tab:CreateSection({ Name = "Configs", Side = side or "Right" })
 
 	local nameBox = section:AddTextbox({
 		Name = "Config Name",
