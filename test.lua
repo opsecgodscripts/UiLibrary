@@ -1,24 +1,17 @@
 --[[
 	Test — example script that uses every element in UiLibrary.
 
-	In Roblox Studio:
-	  1. Make a ModuleScript in ReplicatedStorage named exactly "Library"
-	     and paste UiLibrary/Library.lua into it.
-	  2. Make a LocalScript in StarterPlayer > StarterPlayerScripts
-	     and paste this file into it.
-	  3. Play. Press RightShift to show / hide the window.
-
-	If nothing appears, check the Output window for
-	"Infinite yield possible on 'ReplicatedStorage:WaitForChild("Library")'".
-	That means the ModuleScript is missing, misnamed or in the wrong place.
+	Run this file. It downloads the library from GitHub, builds the window,
+	and RightShift shows / hides it.
 ]]
 
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
 local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Library = require(ReplicatedStorage:WaitForChild("Library"))
+local Library = loadstring(game:HttpGet(
+	"https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
+))()
 
 local Player = Players.LocalPlayer
 local Camera = workspace.CurrentCamera

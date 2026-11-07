@@ -1,8 +1,13 @@
 --[[
 	UiLibrary — a dark, two-column UI library for Roblox.
 
-	Put this file in a ModuleScript named "Library" in ReplicatedStorage,
-	then require it from a LocalScript. See Test.lua for every element.
+	Load it straight from GitHub:
+
+	  local Library = loadstring(game:HttpGet(
+	      "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/main/UiLibrary/Library.lua"
+	  ))()
+
+	See test.lua for every element.
 
 	API
 	  Library:CreateWindow({ Title, Subtitle, ToggleKey, Size, Logo, Theme })
@@ -36,6 +41,25 @@ local TweenService = game:GetService("TweenService")
 
 local Library = {}
 Library.__index = Library
+
+--// where the ScreenGui goes: gethui() if available, then CoreGui, then PlayerGui
+local function getGuiParent()
+	if typeof(gethui) == "function" then
+		local ok, holder = pcall(gethui)
+		if ok and typeof(holder) == "Instance" then
+			return holder
+		end
+	end
+	local ok, coreGui = pcall(function()
+		local cg = game:GetService("CoreGui")
+		local _ = cg:GetChildren() -- errors if this context can't touch CoreGui
+		return cg
+	end)
+	if ok and coreGui then
+		return coreGui
+	end
+	return Players.LocalPlayer:WaitForChild("PlayerGui")
+end
 
 local DefaultTheme = {
 	Background = Color3.fromRGB(17, 17, 21),
@@ -411,7 +435,13 @@ function Library:CreateWindow(config)
 		end
 	end)
 
-	gui.Parent = player:WaitForChild("PlayerGui")
+	-- running the script again replaces the old window instead of stacking a second one
+	local parent = getGuiParent()
+	local existing = parent:FindFirstChild(gui.Name)
+	if existing and existing:IsA("ScreenGui") then
+		existing:Destroy()
+	end
+	gui.Parent = parent
 	return Window
 end
 
