@@ -166,7 +166,7 @@ Options:AddDropdown({
 	end,
 })
 
--- Dropdown with nothing selected shows "--"
+-- Dropdown with nothing selected shows "None"
 Options:AddDropdown({
 	Name = "Mode",
 	Options = { "Easy", "Normal", "Hard" },

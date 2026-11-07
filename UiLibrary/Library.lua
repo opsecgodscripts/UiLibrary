@@ -512,11 +512,13 @@ end
 --// layout constants ---------------------------------------------------------
 -- sizes match the reference layout (450 x 557 window)
 local TOPBAR = 38
-local FOOTER = 14
-local EDGE = 8 -- space between window edge and sections
+local FOOTER = 20
+local EDGE = 10 -- space between window edge and sections
 local PAD = 10 -- space between columns and between stacked sections
-local SECTION_HEADER = 28
-local ELEMENT_GAP = 6
+local SECTION_HEADER = 32
+local ELEMENT_GAP = 10
+local INSET = 12 -- space inside a section, left and right
+local LABEL_GAP = 19 -- label top to its box / bar
 local TEXT = 13 -- element labels (renders about 7px tall in Matcha)
 local SMALL = 12 -- values, footer
 
@@ -1114,8 +1116,8 @@ function Window:_drawWindow()
 	local fy = y + H - FOOTER
 	self:_rect(x, fy, W, FOOTER, th.Footer, 2, 4)
 	self:_rect(x, fy, W, 4, th.Footer, 2)
-	self:_circle(x + 9, fy + FOOTER / 2, 3, self._statusGood and th.Good or th.Bad, 5)
-	self:_text(fitText(self._status, W - 30, SMALL), x + 16, fy + (FOOTER - SMALL) / 2 - 1, th.Text, SMALL, 5)
+	self:_circle(x + 12, fy + FOOTER / 2, 3, self._statusGood and th.Good or th.Bad, 5)
+	self:_text(fitText(self._status, W - 34, SMALL), x + 21, fy + (FOOTER - SMALL) / 2 - 1, th.Text, SMALL, 5)
 
 	-- swallow clicks on the window background so they don't fall through to other logic
 	self:_clickIn(x, y, W, H)
@@ -1155,7 +1157,7 @@ function Window:_drawOverlay()
 	end
 	local th = self.Theme
 	local box = dropdown._box
-	local itemH = 20
+	local itemH = 22
 	local n = #dropdown._options
 	local h = math.max(n, 1) * itemH + 4
 	local x, w = box.x, box.w
@@ -1356,8 +1358,8 @@ function Tab:CreateSection(config)
 end
 
 function Section:_height(colW)
-	local h = SECTION_HEADER + 4
-	local inner = colW - 20
+	local h = SECTION_HEADER + 6
+	local inner = colW - INSET * 2
 	for _, el in ipairs(self._elements) do
 		h = h + el:_height(inner) + ELEMENT_GAP
 	end
@@ -1368,19 +1370,19 @@ function Section:_draw(win, x, y, w, h)
 	local th = win.Theme
 	win:_box(x, y, w, h, th.Section, th.Border, 6, 4)
 
-	local tx = x + 12
-	local ty = y + (SECTION_HEADER - TEXT) / 2 - 1
+	local tx = x + INSET
+	local ty = y + (SECTION_HEADER - TEXT) / 2
 	if hasIcon(self.Icon) then
 		win:_text(self.Icon, tx, ty, th.Accent, TEXT, 9)
 		tx = tx + textWidth(self.Icon, TEXT) + 9
 	end
 	win:_text(fitText(self.Name, x + w - 10 - tx, TEXT), tx, ty, th.Text, TEXT, 9)
 
-	local ey = y + SECTION_HEADER + 4
-	local inner = w - 20 -- 10px inset on both sides
+	local ey = y + SECTION_HEADER + 6
+	local inner = w - INSET * 2
 	for _, el in ipairs(self._elements) do
 		local eh = el:_height(inner)
-		el:_draw(win, x + 10, ey, inner, eh)
+		el:_draw(win, x + INSET, ey, inner, eh)
 		ey = ey + eh + ELEMENT_GAP
 	end
 end
@@ -1407,12 +1409,12 @@ function Section:AddLabel(text)
 end
 
 function Label:_height(w)
-	return #wrapText(self.Text, w, SMALL) * 14
+	return #wrapText(self.Text, w, SMALL) * 16
 end
 
 function Label:_draw(win, x, y, w)
 	for i, line in ipairs(wrapText(self.Text, w, SMALL)) do
-		win:_text(line, x, y + (i - 1) * 14, win.Theme.TextDim, SMALL, 12)
+		win:_text(line, x, y + (i - 1) * 16, win.Theme.TextDim, SMALL, 12)
 	end
 end
 
@@ -1434,7 +1436,7 @@ function Section:AddButton(config)
 end
 
 function Button:_height()
-	return 22
+	return 26
 end
 
 function Button:_draw(win, x, y, w, h)
@@ -1489,7 +1491,7 @@ function Section:AddToggle(config)
 end
 
 function Toggle:_height()
-	return 16
+	return 18
 end
 
 function Toggle:_draw(win, x, y, w, h)
@@ -1584,12 +1586,12 @@ function Slider:_format()
 end
 
 function Slider:_height()
-	return 27
+	return 32
 end
 
 function Slider:_draw(win, x, y, w)
 	local th = win.Theme
-	local barY, barH = y + 15, 12
+	local barY, barH = y + LABEL_GAP, 13
 
 	if win:_clickIn(x, barY - 4, w, barH + 8) then
 		win._activeSlider = self
@@ -1761,7 +1763,7 @@ function Section:AddKeybind(config)
 end
 
 function KeybindRow:_height()
-	return 16
+	return 18
 end
 
 function KeybindRow:_draw(win, x, y, w, h)
@@ -1792,7 +1794,7 @@ function Section:AddTextbox(config)
 end
 
 function Textbox:_height()
-	return 35
+	return 41
 end
 
 function Textbox:_focus()
@@ -1863,7 +1865,7 @@ end
 
 function Textbox:_draw(win, x, y, w)
 	local th = win.Theme
-	local boxY, boxH = y + 15, 20
+	local boxY, boxH = y + LABEL_GAP, 22
 	local focused = win._focusedBox == self
 
 	self._rect = { x = x, y = boxY, w = w, h = boxH }
@@ -1969,7 +1971,7 @@ end
 function Dropdown:_display()
 	if self.Multi then
 		if #self.Value == 0 then
-			return "--"
+			return "None"
 		end
 		local parts = {}
 		for i, v in ipairs(self.Value) do
@@ -1978,7 +1980,7 @@ function Dropdown:_display()
 		return table.concat(parts, ", ")
 	end
 	if self.Value == nil then
-		return "--"
+		return "None"
 	end
 	return tostring(self.Value)
 end
@@ -2006,7 +2008,7 @@ function Dropdown:_choose(option)
 end
 
 function Dropdown:_height()
-	return 35
+	return 41
 end
 
 function Dropdown:_drawGrid(win, cx, cy, color, z)
@@ -2019,7 +2021,7 @@ end
 
 function Dropdown:_draw(win, x, y, w)
 	local th = win.Theme
-	local boxY, boxH = y + 15, 20
+	local boxY, boxH = y + LABEL_GAP, 22
 	self._box = { x = x, y = boxY, w = w, h = boxH }
 
 	local open = win._openDropdown == self
@@ -2033,7 +2035,7 @@ function Dropdown:_draw(win, x, y, w)
 	local fill = hover and th.ElementHover or th.Element
 	win:_box(x, boxY, w, boxH, fill, open and th.Accent or fill, 10, 4)
 	local display = self:_display()
-	win:_text(fitText(display, w - 30, SMALL), x + 7, boxY + (boxH - SMALL) / 2 - 1, display == "--" and th.TextDim or th.Text, SMALL, 12)
+	win:_text(fitText(display, w - 30, SMALL), x + 7, boxY + (boxH - SMALL) / 2 - 1, display == "None" and th.TextMuted or th.Text, SMALL, 12)
 	self:_drawGrid(win, x + w - 11, boxY + boxH / 2, th.Accent, 12)
 end
 
