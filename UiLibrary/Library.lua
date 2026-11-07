@@ -18,7 +18,8 @@
 	    Logo:      link to a PNG / JPG / WebP image, drawn 20 x 20 in the top-left
 	    Font:      "UI" (default), "Plex", "System" or "Monospace"
 	    Theme:     "Default", "Tung", or a table of colors
-	    MaxFps:    cap how often the UI redraws (default: every frame)
+	    MaxFps:    starting FPS cap (default: unlimited); changeable in the UI tab
+	  Window:SetFpsCap(number or nil)  -- caps the UI's redraws, and the game via setfpscap if available
 	    ToggleKey: "RightShift", "Insert", "F1", "K" ... or a virtual-key number (0xA1)
 	               or an Enum.KeyCode if the executor has Enum.
 	    Size:      Vector2/UDim2 (default 450 x 557) or just a width. The window grows
@@ -64,7 +65,7 @@
 	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete UI
 
 	Built-in UI tab
-	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, Show Performance
+	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, FPS Cap, Show Performance
 	  (a "Title | fps | ping" bar, draggable while the UI is open), Notifications,
 	  Hide UI, Unload and Configs. These are saved between runs but not stored in
 	  configs. CreateWindow options: UniversalTab = false to leave it out, or
@@ -2000,6 +2001,18 @@ function Window:RenameConfig(old, new)
 	return true
 end
 
+-- cap = number, or nil for unlimited
+function Window:SetFpsCap(cap)
+	cap = tonumber(cap)
+	if cap and cap <= 0 then
+		cap = nil
+	end
+	self._maxFps = cap
+	if type(setfpscap) == "function" then
+		pcall(setfpscap, cap or 0) -- 0 = uncapped for most executors
+	end
+end
+
 function Window:SetFont(name)
 	FONT = FontIds[name] or (type(name) == "number" and name) or FONT
 end
@@ -2982,6 +2995,30 @@ function Window:_buildUniversalTab(opts, windowConfig)
 		Menu = true,
 		Flag = "UI_MenuKey",
 		Config = false,
+	})
+
+	-- FPS cap: limits how often the UI redraws, and the game too when the executor has setfpscap
+	local capOptions = { "Unlimited", "30", "60", "120", "144", "240", "360" }
+	local startCap = "Unlimited"
+	if window._maxFps then
+		startCap = tostring(math.floor(window._maxFps))
+		local listed = false
+		for _, o in ipairs(capOptions) do
+			listed = listed or o == startCap
+		end
+		if not listed then
+			table.insert(capOptions, 2, startCap)
+		end
+	end
+	interface:AddDropdown({
+		Name = "FPS Cap",
+		Options = capOptions,
+		Default = startCap,
+		Flag = "UI_FpsCap",
+		Config = false,
+		Callback = function(value)
+			window:SetFpsCap(tonumber(value))
+		end,
 	})
 
 	interface:AddToggle({
