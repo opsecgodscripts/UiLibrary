@@ -47,7 +47,7 @@
 
 local Library = {}
 Library.Version = "2.0.0"
-Library.CharWidth = 0.55 -- width of one character as a fraction of the text size (Monospace font)
+Library.CharWidth = nil -- override the estimated character width (fraction of text size) if text looks off
 
 --// runtime compatibility ----------------------------------------------------
 if not Color3.fromRGB then
@@ -62,12 +62,18 @@ pcall(function()
 	UserInputService = game:GetService("UserInputService")
 end)
 
-local FONT = 3
+-- Drawing fonts: UI = 0, System = 1, Plex = 2, Monospace = 3
+local FontIds = { UI = 0, System = 1, Plex = 2, Monospace = 3 }
 pcall(function()
 	if Drawing.Fonts then
-		FONT = Drawing.Fonts.Monospace or Drawing.Fonts.UI or FONT
+		for name in pairs(FontIds) do
+			if type(Drawing.Fonts[name]) == "number" then
+				FontIds[name] = Drawing.Fonts[name]
+			end
+		end
 	end
 end)
+local FONT = FontIds.UI
 
 local spawnTask = (task and task.spawn) or function(fn, ...)
 	return coroutine.wrap(fn)(...)
@@ -117,16 +123,19 @@ end
 
 --// theme --------------------------------------------------------------------
 local DefaultTheme = {
-	Background = Color3.fromRGB(17, 17, 21),
-	Section = Color3.fromRGB(23, 23, 28),
-	Element = Color3.fromRGB(31, 31, 37),
-	ElementHover = Color3.fromRGB(39, 39, 46),
-	Border = Color3.fromRGB(37, 37, 44),
+	Background = Color3.fromRGB(16, 16, 18),
+	Topbar = Color3.fromRGB(16, 16, 18),
+	TabActive = Color3.fromRGB(9, 9, 11),
+	Footer = Color3.fromRGB(11, 11, 13),
+	Section = Color3.fromRGB(23, 23, 26),
+	Element = Color3.fromRGB(32, 32, 36),
+	ElementHover = Color3.fromRGB(40, 40, 45),
+	Border = Color3.fromRGB(33, 33, 37),
 	Accent = Color3.fromRGB(214, 72, 104),
-	AccentSoft = Color3.fromRGB(176, 66, 92),
-	Text = Color3.fromRGB(236, 236, 241),
-	TextDim = Color3.fromRGB(140, 140, 150),
-	TextMuted = Color3.fromRGB(96, 96, 106),
+	AccentSoft = Color3.fromRGB(150, 52, 76),
+	Text = Color3.fromRGB(238, 238, 242),
+	TextDim = Color3.fromRGB(128, 128, 136),
+	TextMuted = Color3.fromRGB(90, 90, 98),
 	Good = Color3.fromRGB(82, 196, 120),
 	Bad = Color3.fromRGB(222, 64, 74),
 }
@@ -152,8 +161,50 @@ local function charSub(text, count)
 	return text:sub(1, count)
 end
 
+local function charWidth()
+	if type(Library.CharWidth) == "number" then
+		return Library.CharWidth
+	end
+	return FONT == FontIds.Monospace and 0.55 or 0.5
+end
+
+local measureCache = {}
+local measurer
+local measureBroken = false
+
+local function measure(text, size)
+	if measureBroken or text == "" then
+		return nil
+	end
+	local key = FONT .. "|" .. size .. "|" .. text
+	local cached = measureCache[key]
+	if cached then
+		return cached
+	end
+	local ok, width = pcall(function()
+		if not measurer then
+			measurer = Drawing.new("Text")
+			measurer.Visible = false
+		end
+		measurer.Font = FONT
+		measurer.Size = size
+		measurer.Text = text
+		return measurer.TextBounds.X
+	end)
+	local n = charCount(text)
+	-- only trust TextBounds when it looks sane for this many characters
+	if ok and type(width) == "number" and width > n * size * 0.2 and width < n * size * 1.0 then
+		measureCache[key] = width
+		return width
+	end
+	if not ok or type(width) ~= "number" then
+		measureBroken = true
+	end
+	return nil
+end
+
 local function textWidth(text, size)
-	return charCount(text) * size * Library.CharWidth
+	return measure(text, size) or charCount(text) * size * charWidth()
 end
 
 local function fitText(text, maxWidth, size)
@@ -161,11 +212,20 @@ local function fitText(text, maxWidth, size)
 	if textWidth(text, size) <= maxWidth then
 		return text
 	end
-	local maxChars = math.floor(maxWidth / (size * Library.CharWidth)) - 3
-	if maxChars < 1 then
+	local count = charCount(text)
+	local lo, hi = 0, count
+	while lo < hi do -- longest prefix that fits with "..."
+		local mid = math.floor((lo + hi + 1) / 2)
+		if textWidth(charSub(text, mid) .. "...", size) <= maxWidth then
+			lo = mid
+		else
+			hi = mid - 1
+		end
+	end
+	if lo < 1 then
 		return ""
 	end
-	return charSub(text, maxChars) .. "..."
+	return charSub(text, lo) .. "..."
 end
 
 local function wrapText(text, maxWidth, size)
@@ -311,11 +371,11 @@ local function viewportSize()
 end
 
 --// layout constants ---------------------------------------------------------
-local TOPBAR = 46
-local FOOTER = 26
+local TOPBAR = 42
+local FOOTER = 22
 local PAD = 10
 local SECTION_HEADER = 30
-local ELEMENT_GAP = 6
+local ELEMENT_GAP = 7
 
 --==============================================================================
 -- Window
@@ -369,6 +429,11 @@ function Library:CreateWindow(config)
 		end
 	end
 
+	if config.Font ~= nil then
+		FONT = FontIds[config.Font] or (type(config.Font) == "number" and config.Font) or FONT
+		measureCache = {}
+	end
+
 	local vw, vh = viewportSize()
 	local width = readWidth(config.Size)
 
@@ -391,8 +456,8 @@ function Library:CreateWindow(config)
 		_statusGood = false,
 		_notifications = {},
 
-		_pool = { Square = {}, Text = {}, Circle = {} },
-		_used = { Square = 0, Text = 0, Circle = 0 },
+		_pool = { Square = {}, Text = {}, Circle = {}, Line = {} },
+		_used = { Square = 0, Text = 0, Circle = 0, Line = 0 },
 		_cornerOk = true,
 
 		_mouseX = 0,
@@ -497,6 +562,16 @@ function Window:_text(str, x, y, color, size, z, align, alpha)
 	o.Position = Vector2.new(math.floor(x + 0.5), math.floor(y + 0.5))
 end
 
+function Window:_line(x1, y1, x2, y2, color, thickness, z, alpha)
+	local o = self:_get("Line")
+	o.From = Vector2.new(x1, y1)
+	o.To = Vector2.new(x2, y2)
+	o.Color = color
+	o.Thickness = thickness or 1
+	o.Transparency = alpha or 1
+	o.ZIndex = z or 5
+end
+
 function Window:_circle(x, y, radius, color, z, alpha)
 	local o = self:_get("Circle")
 	o.Position = Vector2.new(x, y)
@@ -593,6 +668,37 @@ function Window:_layoutColumn(tab, side, colW)
 	return list, total
 end
 
+local function hasIcon(icon)
+	return icon ~= nil and icon ~= "" and not tostring(icon):find("rbxasset")
+end
+
+function Window:_tabWidths()
+	local widths = {}
+	for i, t in ipairs(self._tabs) do
+		local iconW = hasIcon(t.Icon) and textWidth(t.Icon, 13) or 0
+		if t == self._currentTab or iconW == 0 then
+			-- selected tab (or tab without icon): icon + name in a pill
+			local w = 20 + textWidth(t.Name, 13)
+			if iconW > 0 then
+				w = w + iconW + 7
+			end
+			widths[i] = w
+		else
+			widths[i] = math.max(28, iconW + 18)
+		end
+	end
+	return widths
+end
+
+function Window:_drawLogo(x, y)
+	-- small accent chevron mark
+	local a = self.Theme.Accent
+	self:_line(x, y + 1, x + 8, y + 13, a, 3, 5)
+	self:_line(x + 8, y + 13, x + 18, y + 1, a, 3, 5)
+	self:_line(x + 4, y + 1, x + 8, y + 7, a, 2, 5)
+	self:_line(x + 8, y + 7, x + 13, y + 1, a, 2, 5)
+end
+
 function Window:_drawWindow()
 	local th = self.Theme
 	local W = self._width
@@ -604,7 +710,7 @@ function Window:_drawWindow()
 		left, leftH = self:_layoutColumn(tab, "Left", colW)
 		right, rightH = self:_layoutColumn(tab, "Right", colW)
 	end
-	local H = TOPBAR + 1 + PAD + math.max(leftH, rightH, 60) + PAD + FOOTER
+	local H = TOPBAR + PAD + math.max(leftH, rightH, 60) + PAD + FOOTER
 	self._height = H
 
 	-- dragging by the top bar
@@ -616,37 +722,53 @@ function Window:_drawWindow()
 
 	-- frame
 	self:_box(x, y, W, H, th.Background, th.Border, 1, 6)
+	self:_rect(x, y, W, TOPBAR, th.Topbar, 2, 6)
+	self:_rect(x, y + TOPBAR - 6, W, 6, th.Topbar, 2)
 
-	-- brand
-	self:_rect(x + 14, y + 14, 18, 18, th.Accent, 3, 4)
-	self:_rect(x + 19, y + 19, 8, 8, th.Background, 4, 2)
-	local brandW = math.floor(W * 0.45) - 44
-	self:_text(fitText(self.Title, brandW, 14), x + 40, y + 9, th.Text, 14, 5)
-	self:_text(fitText(self.Subtitle, brandW, 11), x + 40, y + 26, th.TextDim, 11, 5)
+	-- brand: logo, title, subtitle on one line
+	self:_drawLogo(x + 14, y + 14)
+	local titleX = x + 40
+	local title = fitText(self.Title, W * 0.3, 14)
+	self:_text(title, titleX, y + 13, th.Text, 14, 5)
+	if self.Subtitle ~= "" then
+		local subX = titleX + textWidth(title, 14) + 8
+		self:_text(fitText(self.Subtitle, W * 0.2, 12), subX, y + 15, th.TextDim, 12, 5)
+	end
 
-	-- tabs
-	local tabsX = x + math.floor(W * 0.45)
-	local tabsW = W - math.floor(W * 0.45) - 8
-	local count = #self._tabs
-	if count > 0 then
-		local each = tabsW / count
-		for i, t in ipairs(self._tabs) do
-			local tx = tabsX + (i - 1) * each
-			local selected = t == self._currentTab
-			local hover = self:_over(tx, y, each, TOPBAR)
-			local label = t.Name
-			if t.Icon and t.Icon ~= "" and not tostring(t.Icon):find("rbxasset") then
-				label = t.Icon .. " " .. label
-			end
-			local color = selected and th.Text or (hover and th.Text or th.TextDim)
-			self:_text(fitText(label, each - 8, 13), tx + each / 2, y + 16, color, 13, 5, "center")
-			if selected then
-				self:_rect(tx + 8, y + TOPBAR - 2, each - 16, 2, th.Accent, 5, 1)
-			end
-			if self:_clickIn(tx, y, each, TOPBAR) then
-				self:SelectTab(t)
+	-- tabs: right-aligned; the selected one is a dark pill with icon + name
+	local widths = self:_tabWidths()
+	local total = 0
+	for _, w in ipairs(widths) do
+		total = total + w + 4
+	end
+	local tx = x + W - 10 - total + 4
+	local pillY, pillH = y + 8, TOPBAR - 16
+	for i, t in ipairs(self._tabs) do
+		local w = widths[i]
+		local selected = t == self._currentTab
+		local hover = self:_over(tx, pillY, w, pillH)
+		if selected then
+			self:_rect(tx, pillY, w, pillH, th.TabActive, 4, 5)
+		elseif hover then
+			self:_rect(tx, pillY, w, pillH, th.Section, 4, 5)
+		end
+		local cx = tx + 10
+		local textY = pillY + (pillH - 13) / 2 - 1
+		if hasIcon(t.Icon) then
+			if selected or textWidth(t.Name, 13) == 0 then
+				self:_text(t.Icon, cx, textY, th.Accent, 13, 5)
+				cx = cx + textWidth(t.Icon, 13) + 7
+			else
+				self:_text(t.Icon, tx + w / 2, textY, hover and th.Text or th.TextDim, 13, 5, "center")
 			end
 		end
+		if selected or not hasIcon(t.Icon) then
+			self:_text(t.Name, cx, textY, selected and th.Text or (hover and th.Text or th.TextDim), 13, 5)
+		end
+		if self:_clickIn(tx, pillY, w, pillH) then
+			self:SelectTab(t)
+		end
+		tx = tx + w + 4
 	end
 
 	-- start dragging when the top bar (outside the tabs) is clicked
@@ -654,10 +776,8 @@ function Window:_drawWindow()
 		self._dragging = Vector2.new(self._mouseX - x, self._mouseY - y)
 	end
 
-	self:_rect(x, y + TOPBAR, W, 1, th.Border, 3)
-
 	-- columns
-	local top = y + TOPBAR + 1 + PAD
+	local top = y + TOPBAR + PAD
 	local function drawColumn(list, cx)
 		local cy = top
 		for _, entry in ipairs(list) do
@@ -670,10 +790,10 @@ function Window:_drawWindow()
 
 	-- footer
 	local fy = y + H - FOOTER
-	self:_rect(x, fy, W, 1, th.Border, 3)
-	self:_circle(x + 15, fy + 13, 3.5, self._statusGood and th.Good or th.Bad, 5)
-	self:_text(fitText(self._status, W * 0.6, 12), x + 25, fy + 6, th.TextDim, 12, 5)
-	self:_text(self._toggleKey.name .. " to hide", x + W - 12, fy + 6, th.TextMuted, 12, 5, "right")
+	self:_rect(x, fy, W, FOOTER, th.Footer, 2, 6)
+	self:_rect(x, fy, W, 6, th.Footer, 2)
+	self:_circle(x + 12, fy + FOOTER / 2, 3, self._statusGood and th.Good or th.Bad, 5)
+	self:_text(fitText(self._status, W - 40, 12), x + 21, fy + (FOOTER - 12) / 2 - 1, th.Text, 12, 5)
 
 	-- swallow clicks on the window background so they don't fall through to other logic
 	self:_clickIn(x, y, W, H)
@@ -853,7 +973,7 @@ function Window:Destroy()
 			end)
 		end
 	end
-	self._pool = { Square = {}, Text = {}, Circle = {} }
+	self._pool = { Square = {}, Text = {}, Circle = {}, Line = {} }
 	local env = (type(getgenv) == "function" and getgenv()) or _G
 	if env.__UiLibraryWindow == self then
 		env.__UiLibraryWindow = nil
@@ -908,15 +1028,14 @@ end
 
 function Section:_draw(win, x, y, w, h)
 	local th = win.Theme
-	win:_box(x, y, w, h, th.Section, th.Border, 6, 4)
+	win:_box(x, y, w, h, th.Section, th.Border, 6, 5)
 
-	local tx = x + 10
-	if self.Icon and self.Icon ~= "" and not tostring(self.Icon):find("rbxasset") then
-		win:_text(self.Icon, tx, y + 8, th.Accent, 13, 9)
-		tx = tx + textWidth(self.Icon, 13) + 7
+	local tx = x + 12
+	if hasIcon(self.Icon) then
+		win:_text(self.Icon, tx, y + 9, th.Accent, 13, 9)
+		tx = tx + textWidth(self.Icon, 13) + 8
 	end
-	win:_text(fitText(self.Name, x + w - 10 - tx, 13), tx, y + 8, th.Text, 13, 9)
-	win:_rect(x + 10, y + SECTION_HEADER - 1, w - 20, 1, th.Border, 8)
+	win:_text(fitText(self.Name, x + w - 10 - tx, 13), tx, y + 9, th.Text, 13, 9)
 
 	local ey = y + SECTION_HEADER + 4
 	local inner = w - 20
@@ -989,9 +1108,9 @@ function Button:_draw(win, x, y, w, h)
 	self._flash = math.max(0, self._flash - win._dt * 5)
 
 	local fill = hover and th.ElementHover or th.Element
-	local border = self._flash > 0 and th.Accent or th.Border
+	local border = self._flash > 0 and th.Accent or fill
 	win:_box(x, y, w, h, fill, border, 10, 4)
-	win:_text(fitText(self.Text, w - 16, 13), x + w / 2, y + 6, th.Text, 13, 12, "center")
+	win:_text(fitText(self.Text, w - 16, 13), x + w / 2, y + (h - 13) / 2 - 1, th.Text, 13, 12, "center")
 end
 
 function Button:SetText(text)
@@ -1016,7 +1135,7 @@ function Section:AddToggle(config)
 end
 
 function Toggle:_height()
-	return 22
+	return 18
 end
 
 function Toggle:_draw(win, x, y, w, h)
@@ -1025,16 +1144,22 @@ function Toggle:_draw(win, x, y, w, h)
 	if win:_clickIn(x, y, w, h) then
 		self:Set(not self.Value)
 	end
-	self._anim = lerp(self._anim, self.Value and 1 or 0, math.min(1, win._dt * 16))
 
-	local color = (self.Value or hover) and th.Text or th.TextDim
-	win:_text(fitText(self.Text, w - 44, 13), x, y + 4, color, 13, 12)
+	local color = self.Value and th.Text or (hover and th.Text or th.TextDim)
+	win:_text(fitText(self.Text, w - 26, 13), x, y + (h - 13) / 2 - 1, color, 13, 12)
 
-	local trackW, trackH = 30, 16
-	local tx, ty = x + w - trackW, y + (h - trackH) / 2
-	local trackColor = self.Value and th.Accent or (hover and th.ElementHover or th.Element)
-	win:_box(tx, ty, trackW, trackH, trackColor, self.Value and th.Accent or th.Border, 10, 8)
-	win:_rect(tx + 2 + self._anim * (trackW - 16), ty + 2, 12, 12, th.Text, 12, 6)
+	local size = 14
+	local bx, by = x + w - size, y + (h - size) / 2
+	if self.Value then
+		-- glow, accent border, filled box, check mark
+		win:_rect(bx - 2, by - 2, size + 4, size + 4, th.AccentSoft, 10, 5, 0.35)
+		win:_box(bx, by, size, size, th.Accent, th.Accent, 11, 3)
+		win:_rect(bx + 2, by + 2, size - 4, size - 4, th.AccentSoft, 13, 2)
+		win:_line(bx + 3.5, by + 7, bx + 6, by + 9.5, th.Text, 1.6, 14)
+		win:_line(bx + 6, by + 9.5, bx + 10.5, by + 4.5, th.Text, 1.6, 14)
+	else
+		win:_box(bx, by, size, size, hover and th.ElementHover or th.Element, th.Border, 11, 3)
+	end
 end
 
 function Toggle:Set(value)
@@ -1099,14 +1224,14 @@ function Slider:_format()
 end
 
 function Slider:_height()
-	return 36
+	return 34
 end
 
 function Slider:_draw(win, x, y, w)
 	local th = win.Theme
-	local barY, barH = y + 22, 6
+	local barY, barH = y + 20, 14
 
-	if win:_clickIn(x, y + 14, w, 22) then
+	if win:_clickIn(x, barY - 4, w, barH + 8) then
 		win._activeSlider = self
 	end
 	if win._activeSlider == self and win._down then
@@ -1115,15 +1240,26 @@ function Slider:_draw(win, x, y, w)
 	end
 
 	local valueText = self:_format()
-	win:_text(fitText(self.Text, w - textWidth(valueText, 12) - 10, 13), x, y, th.Text, 13, 12)
-	win:_text(valueText, x + w, y + 1, th.TextDim, 12, 12, "right")
+	win:_text(fitText(self.Text, w - textWidth(valueText, 13) - 10, 13), x, y, th.Text, 13, 12)
+	win:_text(valueText, x + w, y, th.Text, 13, 12, "right")
 
 	local range = self.Max - self.Min
 	local pct = range > 0 and (self.Value - self.Min) / range or 0
-	local hover = win:_over(x, y + 14, w, 22) or win._activeSlider == self
+	local hover = win:_over(x, barY - 4, w, barH + 8) or win._activeSlider == self
+	local fillW = math.floor(w * pct)
 	win:_rect(x, barY, w, barH, hover and th.ElementHover or th.Element, 10, 3)
-	win:_rect(x, barY, math.max(barH, w * pct), barH, th.Accent, 11, 3)
-	win:_rect(x + w * pct - 5, barY - 2, 10, 10, th.Text, 12, 5)
+	if fillW > 0 then
+		win:_rect(x, barY, math.max(fillW, 4), barH, th.Accent, 11, 3)
+	end
+
+	-- value inside the bar: just past the fill, or inside it near the end when full
+	local label = valueText
+	local lw = textWidth(label, 11)
+	local lx = x + fillW + 8
+	if lx + lw > x + w - 4 then
+		lx = x + fillW - lw - 8
+	end
+	win:_text(label, lx, barY + (barH - 11) / 2 - 1, th.Text, 11, 13)
 end
 
 function Slider:Set(value, silent)
@@ -1229,12 +1365,20 @@ function Dropdown:_choose(option)
 end
 
 function Dropdown:_height()
-	return 44
+	return 42
+end
+
+function Dropdown:_drawGrid(win, cx, cy, color, z)
+	for gx = -1, 1 do
+		for gy = -1, 1 do
+			win:_rect(cx + gx * 4 - 1, cy + gy * 4 - 1, 2, 2, color, z)
+		end
+	end
 end
 
 function Dropdown:_draw(win, x, y, w)
 	local th = win.Theme
-	local boxY, boxH = y + 17, 26
+	local boxY, boxH = y + 18, 24
 	self._box = { x = x, y = boxY, w = w, h = boxH }
 
 	local open = win._openDropdown == self
@@ -1245,10 +1389,11 @@ function Dropdown:_draw(win, x, y, w)
 
 	win:_text(fitText(self.Text, w, 13), x, y, th.Text, 13, 12)
 	local hover = win:_over(x, boxY, w, boxH)
-	win:_box(x, boxY, w, boxH, hover and th.ElementHover or th.Element, open and th.Accent or th.Border, 10, 4)
+	local fill = hover and th.ElementHover or th.Element
+	win:_box(x, boxY, w, boxH, fill, open and th.Accent or fill, 10, 4)
 	local display = self:_display()
-	win:_text(fitText(display, w - 30, 12), x + 8, boxY + 7, display == "--" and th.TextMuted or th.Text, 12, 12)
-	win:_text(open and "^" or "v", x + w - 10, boxY + 6, th.TextDim, 12, 12, "right")
+	win:_text(fitText(display, w - 34, 12), x + 8, boxY + (boxH - 12) / 2 - 1, display == "--" and th.TextDim or th.Text, 12, 12)
+	self:_drawGrid(win, x + w - 13, boxY + boxH / 2, th.Accent, 12)
 end
 
 function Dropdown:Set(value)
