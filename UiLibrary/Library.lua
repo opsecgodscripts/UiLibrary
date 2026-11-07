@@ -357,7 +357,9 @@ for c in ("0123456789"):gmatch(".") do
 	LetterWidth[c] = 0.55
 end
 
-local function textWidth(text, size)
+local widthCache, widthCacheN = {}, 0
+
+local function measureText(text, size)
 	if type(Library.CharWidth) == "number" or FONT == FontIds.Monospace then
 		return charCount(text) * size * charWidth()
 	end
@@ -373,10 +375,42 @@ local function textWidth(text, size)
 	return total * size * 0.9
 end
 
+-- widths are cached: the same labels are measured every frame
+local function textWidth(text, size)
+	local key = FONT .. "|" .. tostring(Library.CharWidth) .. "|" .. size .. "|" .. text
+	local w = widthCache[key]
+	if w == nil then
+		if widthCacheN > 4000 then
+			widthCache, widthCacheN = {}, 0
+		end
+		w = measureText(text, size)
+		widthCache[key] = w
+		widthCacheN = widthCacheN + 1
+	end
+	return w
+end
+
 local FIT_MARGIN = 1.12 -- estimates can be a bit short for wide letters, so fit with some slack
+
+local fitCache, fitCacheN = {}, 0
+local fitTextRaw
 
 local function fitText(text, maxWidth, size)
 	text = tostring(text or "")
+	local key = FONT .. "|" .. tostring(Library.CharWidth) .. "|" .. size .. "|" .. math.floor(maxWidth) .. "|" .. text
+	local out = fitCache[key]
+	if out == nil then
+		if fitCacheN > 4000 then
+			fitCache, fitCacheN = {}, 0
+		end
+		out = fitTextRaw(text, maxWidth, size)
+		fitCache[key] = out
+		fitCacheN = fitCacheN + 1
+	end
+	return out
+end
+
+function fitTextRaw(text, maxWidth, size)
 	maxWidth = maxWidth / FIT_MARGIN
 	if textWidth(text, size) <= maxWidth then
 		return text
@@ -397,7 +431,24 @@ local function fitText(text, maxWidth, size)
 	return charSub(text, lo) .. "..."
 end
 
+local wrapCache, wrapCacheN = {}, 0
+local wrapTextRaw
+
 local function wrapText(text, maxWidth, size)
+	local key = FONT .. "|" .. tostring(Library.CharWidth) .. "|" .. size .. "|" .. math.floor(maxWidth) .. "|" .. tostring(text)
+	local lines = wrapCache[key]
+	if not lines then
+		if wrapCacheN > 500 then
+			wrapCache, wrapCacheN = {}, 0
+		end
+		lines = wrapTextRaw(text, maxWidth, size)
+		wrapCache[key] = lines
+		wrapCacheN = wrapCacheN + 1
+	end
+	return lines
+end
+
+function wrapTextRaw(text, maxWidth, size)
 	local lines = {}
 	for paragraph in (tostring(text or "") .. "\n"):gmatch("(.-)\n") do
 		local line = ""
@@ -1149,8 +1200,16 @@ local function setProp(o, c, key, value)
 	end
 end
 
+local VecKeys = {
+	Position = { "PositionX", "PositionY" },
+	Size = { "SizeX", "SizeY" },
+	From = { "FromX", "FromY" },
+	To = { "ToX", "ToY" },
+}
+
 local function setVec(o, c, key, x, y)
-	local kx, ky = key .. "X", key .. "Y"
+	local keys = VecKeys[key]
+	local kx, ky = keys[1], keys[2]
 	if c[kx] ~= x or c[ky] ~= y then
 		c[kx], c[ky] = x, y
 		o[key] = Vector2.new(x, y)
@@ -1283,17 +1342,16 @@ end
 --// frame --------------------------------------------------------------------
 function Window:_frame()
 	local t = now()
-	self._dt = math.min(t - self._lastFrame, 0.1)
 	self._lastFrame = t
-
-	for kind in pairs(self._used) do
-		self._used[kind] = 0
-	end
 
 	if not Input.focused() then
 		-- game window not focused: hide everything, keep state
 		self._prevDown = false
+		for kind in pairs(self._used) do
+			self._used[kind] = 0
+		end
 		self:_hideUnused()
+		self._forceRedraw = true
 		return
 	end
 
@@ -1336,6 +1394,25 @@ function Window:_frame()
 	end
 
 	self:_updateStats(t)
+
+	-- Idle: when the mouse is still and nothing is happening, redraw IdleRedrawRate times a
+	-- second instead of every frame. Anything interactive redraws at full speed.
+	local moved = self._mouseX ~= self._lastMouseX or self._mouseY ~= self._lastMouseY
+	self._lastMouseX, self._lastMouseY = self._mouseX, self._mouseY
+	local active = moved or down or self._clicked or self._focusedBox or self._listening
+		or #self._notifications > 0 or self._forceRedraw
+	local idleRate = tonumber(Library.IdleRedrawRate) or 30
+	if not active and t - (self._lastDraw or 0) < 1 / idleRate then
+		self:_housekeeping(t)
+		return
+	end
+	self._forceRedraw = false
+	self._dt = math.min(t - (self._lastDraw or t), 0.1)
+	self._lastDraw = t
+	for kind in pairs(self._used) do
+		self._used[kind] = 0
+	end
+
 	if self.Visible then
 		self:_perfInput() -- the performance bar sits on top, so it gets clicks first
 		self:_handleOverlayClick()
@@ -1361,7 +1438,16 @@ function Window:_frame()
 		return
 	end
 	self:_drawNotifications(t)
+	self:_housekeeping(t)
+	if not self.Running then
+		return
+	end
 
+	self:_hideUnused()
+end
+
+-- restores, autoload and autosave: run every frame, drawn or not
+function Window:_housekeeping(t)
 	-- restore saved values for elements created since last frame (after the script built them)
 	if #self._pendingRestore > 0 then
 		local pending = self._pendingRestore
@@ -1383,11 +1469,6 @@ function Window:_frame()
 	if self._dirty and self._autoSave and t - self._lastChange > 0.5 then
 		self:SaveSettings()
 	end
-	if not self.Running then
-		return
-	end
-
-	self:_hideUnused()
 end
 
 --// several windows ---------------------------------------------------------------
@@ -2071,6 +2152,7 @@ function Window:Toggle(visible)
 		visible = not self.Visible
 	end
 	self.Visible = visible == true
+	self._forceRedraw = true
 	if not self.Visible then
 		if self._focusedBox then
 			self._focusedBox:_unfocus(true)
@@ -3763,7 +3845,54 @@ function Cam.update()
 	return true
 end
 
+-- the executor's own world-to-screen, if it has one: it uses the game's view matrix for
+-- the frame being drawn, which stays steadier than reading the camera ourselves
+local nativeProject
+do
+	local candidates = { "WorldToScreen", "worldtoscreen", "world_to_screen" }
+	for _, name in ipairs(candidates) do
+		local fn = rawget(_G, name)
+		if type(fn) ~= "function" and type(getgenv) == "function" then
+			fn = rawget(getgenv(), name)
+		end
+		if type(fn) ~= "function" then
+			pcall(function()
+				fn = _G[name]
+			end)
+		end
+		if type(fn) == "function" then
+			nativeProject = fn
+			Library.ProjectMethod = name
+			break
+		end
+	end
+end
+local nativeBroken = false
+
 function Cam.project(x, y, z)
+	if nativeProject and not nativeBroken then
+		local ok, a, b, c = pcall(nativeProject, Vector3.new(x, y, z))
+		if ok then
+			-- forms seen: (Vector2, onScreen), (x, y, onScreen) or a Vector2/Vector3 alone
+			if type(a) == "number" then
+				if c == false then
+					return nil
+				end
+				return a, b, 1
+			elseif a ~= nil then
+				local sx, sy = prop(a, "X"), prop(a, "Y")
+				local depth = prop(a, "Z")
+				if type(sx) == "number" and type(sy) == "number" then
+					if b == false or (type(depth) == "number" and depth < 0) then
+						return nil
+					end
+					return sx, sy, 1
+				end
+			end
+		end
+		nativeBroken = true -- unexpected result: use our own math from now on
+		Library.ProjectMethod = "camera math"
+	end
 	local dx, dy, dz = x - Cam.cx, y - Cam.cy, z - Cam.cz
 	local depth = -(Cam.m02 * dx + Cam.m12 * dy + Cam.m22 * dz)
 	if depth < 0.1 then
