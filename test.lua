@@ -46,25 +46,28 @@ pcall(function()
 	playerName = game:GetService("Players").LocalPlayer.Name
 end)
 
+local fpsRunning = false
+
 --// Window ------------------------------------------------------------------
 local Window = Library:CreateWindow({
 	Title = "Tungity",
 	Subtitle = "Demo",
 	Logo = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/assets/logo.png",
 	ToggleKey = "RightShift", -- or "Insert", "F1", "K", or a virtual-key number like 0xA1
-	Theme = "Default",        -- or "Tung"
+	Theme = "Default",        -- starting theme ("Default" or "Tung"); changeable in the UI tab
+	OnUnload = function()     -- runs when Unload is pressed in the UI tab
+		fpsRunning = false
+	end,
 	Font = "UI",             -- "UI", "Plex", "System" or "Monospace"
 })
 
 local MainTab = Window:CreateTab({ Name = "Main", Icon = ">" })
 local VisualsTab = Window:CreateTab({ Name = "Visuals", Icon = "*" })
-local SettingsTab = Window:CreateTab({ Name = "Settings", Icon = "#" })
 
 --// Main tab: left section -----------------------------------------------------
 local General = MainTab:CreateSection({ Name = "General", Side = "Left", Icon = "+" })
 
 -- Toggle: FPS counter in the footer
-local fpsRunning = false
 General:AddToggle({
 	Name = "Show FPS",
 	Default = false,
@@ -231,22 +234,7 @@ Options:AddTextbox({
 })
 
 --// Visuals tab --------------------------------------------------------------
-local Look = VisualsTab:CreateSection({ Name = "Look", Side = "Left", Icon = "*" })
-
--- Theme picker: has a Flag, so the choice is saved and comes back next time
-Look:AddDropdown({
-	Name = "Theme",
-	Options = { "Default", "Tung" },
-	Default = "Default",
-	Flag = "Theme",
-	Callback = function(value)
-		Window:SetTheme(value)
-	end,
-})
-
-Look:AddLabel("Themes and colors update instantly.")
-
-local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Right", Icon = "*" })
+local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Left", Icon = "*" })
 local counterLabel = Info:AddLabel("Button pressed 0 times")
 local presses = 0
 local counterButton
@@ -259,38 +247,10 @@ counterButton = Info:AddButton({
 	end,
 })
 
---// Settings tab -------------------------------------------------------------
-local Interface = SettingsTab:CreateSection({ Name = "Interface", Side = "Left", Icon = "#" })
-
--- Menu = true: this keybind shows / hides the window
-Interface:AddKeybind({
-	Name = "Menu Key",
-	Default = "RightShift",
-	Menu = true,
-	Flag = "MenuKey",
-})
-
-Interface:AddLabel("Click a key box, then press a key to rebind. Escape cancels, Backspace clears. Drag the window by the top bar.")
-
-Interface:AddLabel("Anything with a Flag is saved automatically and restored when you run the script again.")
-
-Interface:AddButton({
-	Name = "Hide UI",
-	Callback = function()
-		Window:Toggle(false)
-	end,
-})
-
-Interface:AddButton({
-	Name = "Unload",
-	Callback = function()
-		fpsRunning = false
-		Window:Destroy()
-	end,
-})
-
--- Save / Load / Rename / Delete configs
-Window:AddConfigSection(SettingsTab, "Right")
+local Help = VisualsTab:CreateSection({ Name = "Tips", Side = "Right", Icon = "*" })
+Help:AddLabel("Theme, font, menu key, notifications and configs are in the UI tab (@), which every script gets automatically.")
+Help:AddLabel("Click a key box, then press a key to rebind. Escape cancels, Backspace clears.")
+Help:AddLabel("Anything with a Flag is saved and comes back when you run the script again.")
 
 -- The footer starts as "Disconnected" with a red dot; this turns it green.
 Window:SetStatus("Connected as " .. playerName, true)

@@ -62,6 +62,14 @@
 	  Window:ListConfigs()     Window:SaveSettings()
 	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete UI
 
+	Built-in UI tab
+	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, Notifications,
+	  Hide UI, Unload and Configs. These are saved between runs but not stored in
+	  configs. CreateWindow options: UniversalTab = false to leave it out, or
+	  UniversalTab = { Name = "Settings", Icon = "@" }; OnUnload = function() end
+	  runs when Unload is pressed. Window.UniversalTab is the tab, so you can add
+	  your own sections to it.
+
 	Callbacks only fire when the user changes a value or you call :Set(), not when
 	the element is created.
 
@@ -899,6 +907,10 @@ function Library:CreateWindow(config)
 		end)
 	end
 
+	if config.UniversalTab ~= false then
+		self:_buildUniversalTab(type(config.UniversalTab) == "table" and config.UniversalTab or {}, config)
+	end
+
 	env.__UiLibraryWindow = self
 	_G.__UiLibraryWindow = self
 	if type(shared) == "table" then
@@ -1510,8 +1522,14 @@ function Window:CreateTab(config)
 		Window = self,
 		_sections = {},
 	}, Tab)
-	self._tabs[#self._tabs + 1] = tab
-	if not self._currentTab then
+	local universal = self._universalTab
+	if universal and not config._universal then
+		-- keep the built-in UI tab last
+		table.insert(self._tabs, #self._tabs, tab)
+	else
+		self._tabs[#self._tabs + 1] = tab
+	end
+	if not self._currentTab or (self._currentTab == universal and not config._universal) then
 		self._currentTab = tab
 	end
 	return tab
@@ -1565,11 +1583,12 @@ function Window:_markDirty()
 	self._lastChange = now()
 end
 
-function Window:_snapshot()
+function Window:_snapshot(forConfig)
 	local data = {}
 	for _, flag in ipairs(self._saveOrder) do
 		local value = self.Flags[flag]
-		if value ~= nil then
+		local element = self._saveables[flag]
+		if value ~= nil and not (forConfig and element._noConfig) then
 			data[flag] = value
 		end
 	end
@@ -1631,7 +1650,7 @@ function Window:SaveConfig(name)
 	if name == "" then
 		return false, "Enter a config name"
 	end
-	Storage.write(self:_configPath(name), Json.encode(self:_snapshot()))
+	Storage.write(self:_configPath(name), Json.encode(self:_snapshot(true)))
 	local list = self:ListConfigs()
 	local found = false
 	for _, n in ipairs(list) do
@@ -1694,6 +1713,10 @@ function Window:RenameConfig(old, new)
 	return true
 end
 
+function Window:SetFont(name)
+	FONT = FontIds[name] or (type(name) == "number" and name) or FONT
+end
+
 function Window:SetTheme(theme)
 	local new = buildTheme(theme)
 	for k in pairs(self.Theme) do
@@ -1719,6 +1742,9 @@ function Window:SetTitle(title, subtitle)
 end
 
 function Window:Notify(title, text, duration)
+	if self.NotificationsEnabled == false then
+		return
+	end
 	duration = tonumber(duration) or 3
 	local t = now()
 	self._notifications[#self._notifications + 1] = {
@@ -1826,6 +1852,8 @@ end
 
 function Section:_register(element, config)
 	if element.Flag and config.Save ~= false then
+		-- Config = false: saved between runs, but not part of configs
+		element._noConfig = config.Config == false
 		self.Window:_register(element.Flag, element)
 	end
 end
@@ -2118,6 +2146,7 @@ function newKeybind(window, config) -- assigns the forward-declared local
 	if keybind.Flag then
 		window.Flags[keybind.Flag] = keybind:Get() or "None"
 		if config.Save ~= false then
+			keybind._noConfig = config.Config == false
 			window:_register(keybind.Flag, keybind)
 		end
 	end
@@ -2597,6 +2626,108 @@ pcall(function()
 		getgenv().UiLibrary = Library
 	end
 end)
+
+--==============================================================================
+-- Built-in "UI" tab: the same in every script (theme, font, menu key, configs)
+--==============================================================================
+function Window:_buildUniversalTab(opts, windowConfig)
+	local window = self
+	local tab = self:CreateTab({ Name = opts.Name or "UI", Icon = opts.Icon or "@", _universal = true })
+	self._universalTab = tab
+	self.UniversalTab = tab
+
+	local interface = tab:CreateSection({ Name = "Interface", Side = "Left", Icon = "@" })
+
+	local themeNames = { "Default" }
+	for name in pairs(Library.Themes) do
+		if name ~= "Default" then
+			themeNames[#themeNames + 1] = name
+		end
+	end
+	table.sort(themeNames, function(a, b)
+		if a == "Default" or b == "Default" then
+			return a == "Default"
+		end
+		return a < b
+	end)
+	local startTheme = type(windowConfig.Theme) == "string" and windowConfig.Theme or "Default"
+	interface:AddDropdown({
+		Name = "Theme",
+		Options = themeNames,
+		Default = startTheme,
+		Flag = "UI_Theme",
+		Config = false,
+		Callback = function(value)
+			window:SetTheme(value)
+		end,
+	})
+
+	local startFont = "UI"
+	for name, id in pairs(FontIds) do
+		if id == FONT then
+			startFont = name
+		end
+	end
+	interface:AddDropdown({
+		Name = "Font",
+		Options = { "UI", "Plex", "System", "Monospace" },
+		Default = startFont,
+		Flag = "UI_Font",
+		Config = false,
+		Callback = function(value)
+			window:SetFont(value)
+		end,
+	})
+
+	interface:AddKeybind({
+		Name = "Menu Key",
+		Default = window._toggleKey and window._toggleKey.vk or "RightShift",
+		Menu = true,
+		Flag = "UI_MenuKey",
+		Config = false,
+	})
+
+	interface:AddToggle({
+		Name = "Notifications",
+		Default = true,
+		Flag = "UI_Notifications",
+		Config = false,
+		Callback = function(on)
+			window.NotificationsEnabled = on
+		end,
+	})
+
+	interface:AddButton({
+		Name = "Hide UI",
+		Callback = function()
+			window:Toggle(false)
+		end,
+	})
+
+	local unload
+	local armed = -math.huge
+	unload = interface:AddButton({
+		Name = "Unload",
+		Callback = function()
+			if now() - armed > 3 then
+				armed = now()
+				unload:SetText("Confirm unload")
+				spawnTask(function()
+					waitTask(3)
+					if window.Running then
+						unload:SetText("Unload")
+					end
+				end)
+				return
+			end
+			runCallback(windowConfig.OnUnload)
+			window:Destroy()
+		end,
+	})
+
+	self:AddConfigSection(tab, "Right")
+	return tab
+end
 
 --==============================================================================
 -- Ready-made config section: Window:AddConfigSection(tab, side)
