@@ -2541,6 +2541,22 @@ function Toggle:_restore(value)
 	end
 end
 
+-- give keyboard focus to a textbox or a slider's value
+local function focusTarget(win, target)
+	if win._focusedBox and win._focusedBox ~= target then
+		win._focusedBox:_unfocus(true)
+	end
+	win._focusedBox = target
+	win._openDropdown = nil
+	-- ignore keys that are already held when focusing
+	for code in pairs(TypingKeys) do
+		win._keyPrev[code] = Input.vk(code)
+	end
+	win._keyPrev[VK_ENTER] = Input.vk(VK_ENTER)
+	win._keyPrev[VK_ESCAPE] = Input.vk(VK_ESCAPE)
+	win._backHeld = Input.vk(VK_BACK) and 1 or 0
+end
+
 --// slider -------------------------------------------------------------------
 local Slider = {}
 Slider.__index = Slider
@@ -2566,6 +2582,7 @@ function Section:AddSlider(config)
 		Min = min,
 		Max = max,
 		Increment = tonumber(config.Increment) or 1,
+		_typed = "",
 		Suffix = config.Suffix or "",
 		Flag = config.Flag,
 		Callback = config.Callback,
@@ -2611,9 +2628,26 @@ function Slider:_draw(win, x, y, w)
 		self:Set(self.Min + (self.Max - self.Min) * pct)
 	end
 
-	local valueText = self:_format()
-	win:_text(fitText(self.Text, w - textWidth(valueText, TEXT) - 10, TEXT), x, y, th.Text, TEXT, 12)
-	win:_text(valueText, x + w, y, th.Text, TEXT, 12, "right")
+	-- the value in the top-right: click it to type a number
+	local editing = win._focusedBox == self
+	local valueText = editing and self._typed or self:_format()
+	local vw = math.max(textWidth(valueText, TEXT) * FIT_MARGIN, editing and 36 or 0) + 10
+	local vx, vy, vh = x + w - vw + 4, y - 3, TEXT + 6
+	self._rect = { x = vx, y = vy, w = vw, h = vh }
+	local overValue = win:_over(vx, vy, vw, vh)
+	if win:_clickIn(vx, vy, vw, vh) and not editing then
+		self:_startEdit()
+		editing = true
+		valueText = self._typed
+	end
+	if editing or overValue then
+		win:_box(vx, vy, vw, vh, th.Element, editing and th.Accent or th.Border, 10, 3)
+	end
+	win:_text(fitText(self.Text, w - vw - 6, TEXT), x, y, th.Text, TEXT, 12)
+	win:_text(valueText, x + w, y, editing and th.Accent or th.Text, TEXT, 12, "right")
+	if editing and (os.clock() % 1) < 0.55 then
+		win:_rect(x + w + 1, vy + 3, 1, vh - 6, th.Accent, 13)
+	end
 
 	local range = self.Max - self.Min
 	local pct = range > 0 and (self.Value - self.Min) / range or 0
@@ -2632,6 +2666,36 @@ function Slider:_draw(win, x, y, w)
 		lx = x + fillW - lw - 8
 	end
 	win:_text(label, lx, barY + (barH - 11) / 2 - 1, th.Text, 11, 13)
+end
+
+-- typing a value (Enter or clicking away applies it, Escape cancels)
+function Slider:_startEdit()
+	self._typed = ""
+	focusTarget(self.Window, self)
+end
+
+function Slider:_insert(char)
+	if char:match("[%d%.%-]") and #self._typed < 12 then
+		self._typed = self._typed .. char
+	end
+end
+
+function Slider:_backspace()
+	self._typed = self._typed:sub(1, -2)
+end
+
+function Slider:_unfocus(submit)
+	local win = self.Window
+	if win._focusedBox ~= self then
+		return
+	end
+	win._focusedBox = nil
+	local n = tonumber(self._typed)
+	if submit and n then
+		-- out of range snaps to the nearest end
+		self:Set(clamp(n, self.Min, self.Max))
+	end
+	self._typed = ""
 end
 
 function Slider:Set(value, silent)
@@ -2925,23 +2989,11 @@ function Textbox:_height()
 end
 
 function Textbox:_focus()
-	local win = self.Window
-	if win._focusedBox and win._focusedBox ~= self then
-		win._focusedBox:_unfocus(true)
-	end
-	win._focusedBox = self
-	win._openDropdown = nil
 	self._before = self.Value
 	if self.ClearOnFocus then
 		self.Value = ""
 	end
-	-- ignore keys that are already held when focusing
-	for code in pairs(TypingKeys) do
-		win._keyPrev[code] = Input.vk(code)
-	end
-	win._keyPrev[VK_ENTER] = Input.vk(VK_ENTER)
-	win._keyPrev[VK_ESCAPE] = Input.vk(VK_ESCAPE)
-	win._backHeld = Input.vk(VK_BACK) and 1 or 0
+	focusTarget(self.Window, self)
 end
 
 function Textbox:_unfocus(submit)
@@ -3961,6 +4013,10 @@ function Window:OpenAnimationTracker()
 				else
 					local seenNow = {}
 					local playing = Library.GetPlayingAnimations(tgt.model)
+					-- steady order so the ESP lines don't swap places between reads
+					table.sort(playing, function(a, b)
+						return tostring(a.Id) < tostring(b.Id)
+					end)
 					tgt.playing = playing
 					for _, anim in ipairs(playing) do
 						local key = anim.Key or anim.Id
@@ -3977,13 +4033,66 @@ function Window:OpenAnimationTracker()
 		end
 	end)
 
-	-- ESP: name + distance above the head, playing animations below the feet
-	tracker._onDraw = function(win)
+	-- ESP: name + distance above the head, playing animations below the feet.
+	-- Its own Drawing objects (not shared with the UI), centered by Drawing itself, whole
+	-- pixels, and a property is only written when it changes - this keeps it steady.
+	local espTexts = {}
+	local function espText(i)
+		local t = espTexts[i]
+		if not t then
+			local ok, o = pcall(Drawing.new, "Text")
+			if not ok then
+				return nil
+			end
+			t = { o = o, c = {} }
+			pcall(function()
+				o.Center = true
+				o.Outline = true
+				o.Transparency = 1
+				o.ZIndex = 0
+			end)
+			espTexts[i] = t
+		end
+		return t
+	end
+	local function set(t, key, value)
+		if t.c[key] ~= value then
+			t.c[key] = value
+			t.o[key] = value
+		end
+	end
+	local function place(t, str, x, y, color, size)
+		x, y = math.floor(x + 0.5), math.floor(y + 0.5)
+		set(t, "Text", str)
+		set(t, "Size", size)
+		set(t, "Font", FONT)
+		set(t, "Color", color)
+		if t.c.x ~= x or t.c.y ~= y then
+			t.c.x, t.c.y = x, y
+			t.o.Position = Vector2.new(x, y)
+		end
+		set(t, "Visible", true)
+	end
+	local function hideFrom(n)
+		for i = n, #espTexts do
+			set(espTexts[i], "Visible", false)
+		end
+	end
+
+	local function drawEsp()
 		if not state.esp or #state.targets == 0 or not Cam.update() then
+			hideFrom(1)
 			return
 		end
-		local th = win.Theme
-		local Z = -100 -- under every window (the tracker's z base is 100)
+		local th = tracker.Theme
+		local used = 0
+		local function line(str, x, y, color, size)
+			local t = espText(used + 1)
+			if t then
+				used = used + 1
+				place(t, str, x, y, color, size)
+			end
+		end
 		local me = Library.FindCharacter(prop(prop(Players, "LocalPlayer"), "Name") or "")
 		local myPos = prop(rootPart(me), "Position")
 		for _, tgt in ipairs(state.targets) do
@@ -3995,28 +4104,47 @@ function Window:OpenAnimationTracker()
 					local label = tgt.name
 					if myPos and tgt.model ~= me then
 						local dx, dy, dz = pos.X - myPos.X, pos.Y - myPos.Y, pos.Z - myPos.Z
-						local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-						label = string.format("%s [%dm]", label, math.floor(d + 0.5))
+						label = string.format("%s [%dm]", label, math.floor(math.sqrt(dx * dx + dy * dy + dz * dz) + 0.5))
 					end
-					win:_text(label, hx, hy - 16, th.Accent, 13, Z, "center", 1, true)
-
+					line(label, hx, hy - 16, th.Accent, 13)
 					local playing = tgt.playing or {}
 					if #playing == 0 then
-						win:_text("no animations", fx, fy + 4, th.TextMuted, 12, Z, "center", 1, true)
+						line("no animations", fx, fy + 4, th.TextMuted, 12)
 					end
 					for i = 1, math.min(#playing, 6) do
 						local anim = playing[i]
 						local name = type(Library.AnimationNames) == "table" and Library.AnimationNames[tostring(anim.Id)]
-						local line = string.format("%s  %.2fs", name and (name .. " " .. anim.Id) or tostring(anim.Id), anim.Time or 0)
-						win:_text(line, fx, fy + 4 + (i - 1) * 14, i == 1 and th.Text or th.TextDim, 12, Z, "center", 1, true)
+						local text = string.format("%s  %.1fs", name and (name .. " " .. anim.Id) or tostring(anim.Id), anim.Time or 0)
+						line(text, fx, fy + 4 + (i - 1) * 14, i == 1 and th.Text or th.TextDim, 12)
 					end
 					if #playing > 6 then
-						win:_text("+" .. (#playing - 6) .. " more", fx, fy + 4 + 6 * 14, th.TextMuted, 12, Z, "center", 1, true)
+						line("+" .. (#playing - 6) .. " more", fx, fy + 4 + 6 * 14, th.TextMuted, 12)
 					end
 				end
 			end
 		end
+		hideFrom(used + 1)
 	end
+
+	-- every frame, separate from the UI redraw
+	spawnTask(function()
+		while tracker.Running do
+			local ok, err = pcall(drawEsp)
+			if not ok and tostring(err) ~= state.espError then
+				state.espError = tostring(err)
+				log("tracker ESP error:", err)
+			end
+			waitTask()
+		end
+		for _, t in ipairs(espTexts) do
+			pcall(function()
+				t.o.Visible = false
+			end)
+			pcall(function()
+				t.o:Remove()
+			end)
+		end
+	end)
 
 	tracker.State = state
 	return tracker
