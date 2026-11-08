@@ -3884,21 +3884,27 @@ end
 
 -- world -> screen, the same way the Demon://Slayer ESP does it: direct reads (the whole
 -- frame runs inside one pcall), camera math by hand, nothing cached between frames
-local Cam = { lastFov = nil, tf = 1 }
-function Cam.update()
-	local cam = workspace.CurrentCamera
-	if not cam then
-		return false
+local Cam = { lastFov = nil, tf = 1, slowAt = 0 }
+-- reading game values is the expensive part in Matcha: the camera object, viewport size
+-- and FOV are refreshed twice a second, only the CFrame is read every frame
+function Cam.update(t)
+	if not Cam.cam or t >= Cam.slowAt then
+		Cam.slowAt = t + 0.5
+		local cam = workspace.CurrentCamera
+		Cam.cam = cam
+		if not cam then
+			return false
+		end
+		local vp, fov = cam.ViewportSize, cam.FieldOfView
+		Cam.hw, Cam.hh = vp.X * 0.5, vp.Y * 0.5
+		if fov ~= Cam.lastFov then
+			Cam.lastFov = fov
+			Cam.tf = math.tan(math.rad(fov) * 0.5)
+		end
+		Cam.focal = Cam.hh / Cam.tf
 	end
-	local vp, fov = cam.ViewportSize, cam.FieldOfView
-	Cam.hw, Cam.hh = vp.X * 0.5, vp.Y * 0.5
-	if fov ~= Cam.lastFov then
-		Cam.lastFov = fov
-		Cam.tf = math.tan(math.rad(fov) * 0.5)
-	end
-	Cam.focal = Cam.hh / Cam.tf
 	Cam.cx, Cam.cy, Cam.cz, Cam.m00, Cam.m01, Cam.m02, Cam.m10, Cam.m11, Cam.m12, Cam.m20, Cam.m21, Cam.m22 =
-		cam.CFrame:GetComponents()
+		Cam.cam.CFrame:GetComponents()
 	return true
 end
 
@@ -4202,6 +4208,21 @@ function Window:OpenAnimationTracker()
 						return tostring(a.Id) < tostring(b.Id)
 					end)
 					tgt.playing = playing
+					-- ESP lines are built here (20x a second), not every frame
+					local lines = {}
+					for i = 1, math.min(#playing, 6) do
+						local anim = playing[i]
+						local name = type(Library.AnimationNames) == "table" and Library.AnimationNames[tostring(anim.Id)]
+						lines[i] = string.format("%s  %.1fs", name and (name .. " " .. anim.Id) or tostring(anim.Id), anim.Time or 0)
+					end
+					if #playing > 6 then
+						lines[#lines + 1] = "+" .. (#playing - 6) .. " more"
+					end
+					if #playing == 0 then
+						lines[1] = "no animations"
+					end
+					tgt.lines = lines
+					tgt.lineCount = #playing
 					for _, anim in ipairs(playing) do
 						local key = anim.Key or anim.Id
 						seenNow[key] = true
@@ -4263,44 +4284,52 @@ function Window:OpenAnimationTracker()
 	end
 
 	local function drawEsp()
-		if not state.esp or #state.targets == 0 or not Cam.update() then
+		local t = now()
+		if not Cam.update(t) then
 			hideFrom(1)
 			return
 		end
 		local th = tracker.Theme
-		local t = now()
 		local used = 0
 		local function line(str, x, y, color, size)
-			local t = espText(used + 1)
-			if t then
+			local slot = espText(used + 1)
+			if slot then
 				used = used + 1
-				place(t, str, x, y, color, size)
+				place(slot, str, x, y, color, size)
 			end
 		end
-		-- direct reads like the Slayer range ESP: your character from LocalPlayer.Character,
-		-- the target's root part looked up once, its Position read fresh every frame
-		local lp = Players.LocalPlayer
-		local me = lp and lp.Character
-		local myRoot = me and me:FindFirstChild("HumanoidRootPart")
-		local myPos = myRoot and myRoot.Position
+
+		-- your character: looked up once a second, its position read 10x a second (distance)
+		if t >= (state.meAt or 0) then
+			state.meAt = t + 1
+			local lp = Players.LocalPlayer
+			state.me = lp and lp.Character
+			state.myRoot = state.me and state.me:FindFirstChild("HumanoidRootPart")
+		end
+		if t >= (state.myPosAt or 0) then
+			state.myPosAt = t + 0.1
+			state.myPos = state.myRoot and state.myRoot.Position
+			state.distDue = true
+		end
+		local myPos = state.myPos
+
 		for _, tgt in ipairs(state.targets) do
 			if tgt.partModel ~= tgt.model or not tgt.part then
 				tgt.partModel = tgt.model
 				tgt.part = rootPart(tgt.model)
 			end
-			local raw = tgt.part and tgt.part.Position
-			local pos = raw
-			if raw and state.smoothing > 0 then
+			local pos = tgt.part and tgt.part.Position -- the one read per target per frame
+			if pos and state.smoothing > 0 then
 				-- optional smoothing of the target position (off by default)
 				local sp = tgt.smooth
 				local dt = t - (tgt.smoothAt or t)
 				tgt.smoothAt = t
 				if not sp or tgt.smoothModel ~= tgt.model then
-					sp = { X = raw.X, Y = raw.Y, Z = raw.Z }
+					sp = { X = pos.X, Y = pos.Y, Z = pos.Z }
 				else
-					local dx, dy, dz = raw.X - sp.X, raw.Y - sp.Y, raw.Z - sp.Z
+					local dx, dy, dz = pos.X - sp.X, pos.Y - sp.Y, pos.Z - sp.Z
 					if dx * dx + dy * dy + dz * dz > 400 then
-						sp = { X = raw.X, Y = raw.Y, Z = raw.Z }
+						sp = { X = pos.X, Y = pos.Y, Z = pos.Z }
 					else
 						local k = 1 - math.exp(-math.max(dt, 0) / state.smoothing)
 						sp = { X = sp.X + dx * k, Y = sp.Y + dy * k, Z = sp.Z + dz * k }
@@ -4310,31 +4339,37 @@ function Window:OpenAnimationTracker()
 				pos = sp
 			end
 			if pos then
-				local hx, hy = Cam.project(pos.X, pos.Y + 3.4, pos.Z)
-				local fx, fy = Cam.project(pos.X, pos.Y - 3.6, pos.Z)
+				local px, py, pz = pos.X, pos.Y, pos.Z
+				local hx, hy = Cam.project(px, py + 3.4, pz)
+				local fx, fy = Cam.project(px, py - 3.6, pz)
 				if hx and fx then
-					local label = tgt.name
-					if myPos and tgt.model ~= me then
-						local dx, dy, dz = pos.X - myPos.X, pos.Y - myPos.Y, pos.Z - myPos.Z
-						label = string.format("%s [%dm]", label, math.floor(math.sqrt(dx * dx + dy * dy + dz * dz) + 0.5))
+					-- name label: rebuilt only when the whole-stud distance changes
+					if state.distDue or not tgt.label then
+						local label = tgt.name
+						if myPos and tgt.model ~= state.me then
+							local dx, dy, dz = px - myPos.X, py - myPos.Y, pz - myPos.Z
+							local d = math.floor(math.sqrt(dx * dx + dy * dy + dz * dz) + 0.5)
+							if d ~= tgt.dist or not tgt.label then
+								tgt.dist = d
+								tgt.label = label .. " [" .. d .. "m]"
+							end
+						else
+							tgt.label = label
+						end
 					end
-					line(label, hx, hy - 16, th.Accent, 13)
-					local playing = tgt.playing or {}
-					if #playing == 0 then
-						line("no animations", fx, fy + 4, th.TextMuted, 12)
-					end
-					for i = 1, math.min(#playing, 6) do
-						local anim = playing[i]
-						local name = type(Library.AnimationNames) == "table" and Library.AnimationNames[tostring(anim.Id)]
-						local text = string.format("%s  %.1fs", name and (name .. " " .. anim.Id) or tostring(anim.Id), anim.Time or 0)
-						line(text, fx, fy + 4 + (i - 1) * 14, i == 1 and th.Text or th.TextDim, 12)
-					end
-					if #playing > 6 then
-						line("+" .. (#playing - 6) .. " more", fx, fy + 4 + 6 * 14, th.TextMuted, 12)
+					line(tgt.label, hx, hy - 16, th.Accent, 13)
+					local lines = tgt.lines
+					if lines then
+						for i = 1, #lines do
+							local color = (tgt.lineCount or 0) == 0 and th.TextMuted
+								or (i == 1 and th.Text or (i == 7 and th.TextMuted or th.TextDim))
+							line(lines[i], fx, fy + 4 + (i - 1) * 14, color, 12)
+						end
 					end
 				end
 			end
 		end
+		state.distDue = false
 		hideFrom(used + 1)
 	end
 
