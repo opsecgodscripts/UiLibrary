@@ -3981,7 +3981,7 @@ function Window:OpenAnimationTracker()
 	local targetSec = tab:CreateSection({ Name = "Target" })
 	local animSec = tab:CreateSection({ Name = "Animations" })
 
-	local state = { targets = {}, history = {}, printing = false, esp = true, smoothing = 0, espRate = 240 }
+	local state = { targets = {}, history = {}, printing = false, esp = true, espRate = 240 }
 	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
 
 	local function playerNames()
@@ -4146,18 +4146,6 @@ function Window:OpenAnimationTracker()
 		end,
 	})
 
-	targetSec:AddSlider({
-		Name = "ESP Smoothing",
-		Min = 0,
-		Max = 150,
-		Default = 0,
-		Increment = 5,
-		Suffix = "ms",
-		Callback = function(ms)
-			state.smoothing = ms / 1000
-		end,
-	})
-
 	list = animSec:AddList({
 		Rows = 6,
 		Empty = "Turn on Tracking to see animations",
@@ -4303,6 +4291,51 @@ function Window:OpenAnimationTracker()
 		end
 	end
 
+	-- The game stores a character's position less often than the ESP redraws, so the raw
+	-- value sits still for a few frames and then jumps. Instead: work out the speed from the
+	-- last position changes, move the label forward at that speed between updates, and
+	-- lightly smooth the small correction when the next real position arrives.
+	local PREDICT_MAX = 0.1 -- never predict further ahead than this (seconds)
+	local SETTLE = 0.03 -- how quickly corrections fade out (seconds)
+	local SNAP = 20 -- teleports / respawns further than this (studs) snap straight there
+	local function predict(tgt, raw, t)
+		local rx, ry, rz = raw.X, raw.Y, raw.Z
+		local p = tgt.pred
+		if not p or tgt.predModel ~= tgt.model then
+			p = { x = rx, y = ry, z = rz, t = t, vx = 0, vy = 0, vz = 0, sx = rx, sy = ry, sz = rz, at = t }
+			tgt.pred, tgt.predModel = p, tgt.model
+			return { X = rx, Y = ry, Z = rz }
+		end
+		if rx ~= p.x or ry ~= p.y or rz ~= p.z then
+			local dx, dy, dz = rx - p.x, ry - p.y, rz - p.z
+			local dt = t - p.t
+			if dx * dx + dy * dy + dz * dz > SNAP * SNAP or dt <= 0 or dt > 0.5 then
+				p.vx, p.vy, p.vz = 0, 0, 0
+				if dx * dx + dy * dy + dz * dz > SNAP * SNAP then
+					p.sx, p.sy, p.sz = rx, ry, rz
+				end
+			else
+				-- new speed, blended with the old one so one odd update doesn't throw it off
+				local k = 0.6
+				p.vx = p.vx + (dx / dt - p.vx) * k
+				p.vy = p.vy + (dy / dt - p.vy) * k
+				p.vz = p.vz + (dz / dt - p.vz) * k
+			end
+			p.x, p.y, p.z, p.t = rx, ry, rz, t
+		end
+		-- where it should be now
+		local ahead = math.min(t - p.t, PREDICT_MAX)
+		local tx, ty, tz = rx + p.vx * ahead, ry + p.vy * ahead, rz + p.vz * ahead
+		-- ease toward it so a correction is spread over a couple of frames
+		local dt = math.max(t - p.at, 0)
+		p.at = t
+		local a = 1 - math.exp(-dt / SETTLE)
+		p.sx = p.sx + (tx - p.sx) * a
+		p.sy = p.sy + (ty - p.sy) * a
+		p.sz = p.sz + (tz - p.sz) * a
+		return { X = p.sx, Y = p.sy, Z = p.sz }
+	end
+
 	local function drawEsp()
 		local t = now()
 		if not Cam.update(t) then
@@ -4338,26 +4371,8 @@ function Window:OpenAnimationTracker()
 				tgt.partModel = tgt.model
 				tgt.part = rootPart(tgt.model)
 			end
-			local pos = tgt.part and tgt.part.Position -- the one read per target per frame
-			if pos and state.smoothing > 0 then
-				-- optional smoothing of the target position (off by default)
-				local sp = tgt.smooth
-				local dt = t - (tgt.smoothAt or t)
-				tgt.smoothAt = t
-				if not sp or tgt.smoothModel ~= tgt.model then
-					sp = { X = pos.X, Y = pos.Y, Z = pos.Z }
-				else
-					local dx, dy, dz = pos.X - sp.X, pos.Y - sp.Y, pos.Z - sp.Z
-					if dx * dx + dy * dy + dz * dz > 400 then
-						sp = { X = pos.X, Y = pos.Y, Z = pos.Z }
-					else
-						local k = 1 - math.exp(-math.max(dt, 0) / state.smoothing)
-						sp = { X = sp.X + dx * k, Y = sp.Y + dy * k, Z = sp.Z + dz * k }
-					end
-				end
-				tgt.smooth, tgt.smoothModel = sp, tgt.model
-				pos = sp
-			end
+			local raw = tgt.part and tgt.part.Position -- the one read per target per frame
+			local pos = raw and predict(tgt, raw, t)
 			if pos then
 				local px, py, pz = pos.X, pos.Y, pos.Z
 				local hx, hy = Cam.project(px, py + 3.4, pz)
