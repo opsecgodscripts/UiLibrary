@@ -3822,86 +3822,35 @@ function Library.FindByPath(path)
 	return found
 end
 
--- world -> screen, done by hand from the camera's CFrame (works in Matcha)
-local Cam = {}
+-- world -> screen, the same way the Demon://Slayer ESP does it: direct reads (the whole
+-- frame runs inside one pcall), camera math by hand, nothing cached between frames
+local Cam = { lastFov = nil, tf = 1 }
 function Cam.update()
-	local cam = prop(workspace, "CurrentCamera")
-	local vp, fov, cf = prop(cam, "ViewportSize"), prop(cam, "FieldOfView"), prop(cam, "CFrame")
-	if not (vp and type(fov) == "number" and cf) then
+	local cam = workspace.CurrentCamera
+	if not cam then
 		return false
 	end
-	local ok, cx, cy, cz, m00, m01, m02, m10, m11, m12, m20, m21, m22 = pcall(function()
-		return cf:GetComponents()
-	end)
-	if not ok or type(m22) ~= "number" then
-		return false
-	end
-	Cam.cx, Cam.cy, Cam.cz = cx, cy, cz
-	Cam.m00, Cam.m01, Cam.m02 = m00, m01, m02
-	Cam.m10, Cam.m11, Cam.m12 = m10, m11, m12
-	Cam.m20, Cam.m21, Cam.m22 = m20, m21, m22
+	local vp, fov = cam.ViewportSize, cam.FieldOfView
 	Cam.hw, Cam.hh = vp.X * 0.5, vp.Y * 0.5
-	Cam.focal = Cam.hh / math.tan(math.rad(fov) * 0.5)
+	if fov ~= Cam.lastFov then
+		Cam.lastFov = fov
+		Cam.tf = math.tan(math.rad(fov) * 0.5)
+	end
+	Cam.focal = Cam.hh / Cam.tf
+	Cam.cx, Cam.cy, Cam.cz, Cam.m00, Cam.m01, Cam.m02, Cam.m10, Cam.m11, Cam.m12, Cam.m20, Cam.m21, Cam.m22 =
+		cam.CFrame:GetComponents()
 	return true
 end
 
--- the executor's own world-to-screen, if it has one: it uses the game's view matrix for
--- the frame being drawn, which stays steadier than reading the camera ourselves
-local nativeProject
-do
-	local candidates = { "WorldToScreen", "worldtoscreen", "world_to_screen" }
-	for _, name in ipairs(candidates) do
-		local fn = rawget(_G, name)
-		if type(fn) ~= "function" and type(getgenv) == "function" then
-			fn = rawget(getgenv(), name)
-		end
-		if type(fn) ~= "function" then
-			pcall(function()
-				fn = _G[name]
-			end)
-		end
-		if type(fn) == "function" then
-			nativeProject = fn
-			Library.ProjectMethod = name
-			break
-		end
-	end
-end
-local nativeBroken = false
-
 function Cam.project(x, y, z)
-	if nativeProject and not nativeBroken then
-		local ok, a, b, c = pcall(nativeProject, Vector3.new(x, y, z))
-		if ok then
-			-- forms seen: (Vector2, onScreen), (x, y, onScreen) or a Vector2/Vector3 alone
-			if type(a) == "number" then
-				if c == false then
-					return nil
-				end
-				return a, b, 1
-			elseif a ~= nil then
-				local sx, sy = prop(a, "X"), prop(a, "Y")
-				local depth = prop(a, "Z")
-				if type(sx) == "number" and type(sy) == "number" then
-					if b == false or (type(depth) == "number" and depth < 0) then
-						return nil
-					end
-					return sx, sy, 1
-				end
-			end
-		end
-		nativeBroken = true -- unexpected result: use our own math from now on
-		Library.ProjectMethod = "camera math"
-	end
 	local dx, dy, dz = x - Cam.cx, y - Cam.cy, z - Cam.cz
 	local depth = -(Cam.m02 * dx + Cam.m12 * dy + Cam.m22 * dz)
-	if depth < 0.1 then
-		return nil -- behind the camera
+	if depth < 0.01 then
+		return nil
 	end
 	local s = Cam.focal / depth
 	return Cam.hw + (Cam.m00 * dx + Cam.m10 * dy + Cam.m20 * dz) * s,
-		Cam.hh - (Cam.m01 * dx + Cam.m11 * dy + Cam.m21 * dz) * s,
-		depth
+		Cam.hh - (Cam.m01 * dx + Cam.m11 * dy + Cam.m21 * dz) * s
 end
 
 local function rootPart(model)
@@ -3958,7 +3907,7 @@ function Window:OpenAnimationTracker()
 	local targetSec = tab:CreateSection({ Name = "Target" })
 	local animSec = tab:CreateSection({ Name = "Animations" })
 
-	local state = { targets = {}, history = {}, printing = false, esp = true, smoothing = 0.05 }
+	local state = { targets = {}, history = {}, printing = false, esp = true, smoothing = 0 }
 	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
 
 	local function playerNames()
@@ -4115,7 +4064,7 @@ function Window:OpenAnimationTracker()
 		Name = "ESP Smoothing",
 		Min = 0,
 		Max = 150,
-		Default = 50,
+		Default = 0,
 		Increment = 5,
 		Suffix = "ms",
 		Callback = function(ms)
@@ -4261,6 +4210,7 @@ function Window:OpenAnimationTracker()
 			return
 		end
 		local th = tracker.Theme
+		local t = now()
 		local used = 0
 		local function line(str, x, y, color, size)
 			local t = espText(used + 1)
@@ -4269,38 +4219,33 @@ function Window:OpenAnimationTracker()
 				place(t, str, x, y, color, size)
 			end
 		end
-		-- parts are looked up once and reused; only positions are read every frame
-		local t = now()
-		if not state.myRoot or t > (state.myRootAt or 0) then
-			state.me = Library.FindCharacter(prop(prop(Players, "LocalPlayer"), "Name") or "")
-			state.myRoot = rootPart(state.me)
-			state.myRootAt = t + 1
-		end
-		local me = state.me
-		local myPos = prop(state.myRoot, "Position")
+		-- direct reads like the Slayer range ESP: your character from LocalPlayer.Character,
+		-- the target's root part looked up once, its Position read fresh every frame
+		local lp = Players.LocalPlayer
+		local me = lp and lp.Character
+		local myRoot = me and me:FindFirstChild("HumanoidRootPart")
+		local myPos = myRoot and myRoot.Position
 		for _, tgt in ipairs(state.targets) do
 			if tgt.partModel ~= tgt.model or not tgt.part then
 				tgt.partModel = tgt.model
 				tgt.part = rootPart(tgt.model)
 			end
-			local raw = prop(tgt.part, "Position")
-			local pos
-			if raw then
-				-- smooth the target's position (not the camera): the stored position can step
-				-- between network updates while the game draws the character smoothly
-				local tau = state.smoothing
+			local raw = tgt.part and tgt.part.Position
+			local pos = raw
+			if raw and state.smoothing > 0 then
+				-- optional smoothing of the target position (off by default)
 				local sp = tgt.smooth
 				local dt = t - (tgt.smoothAt or t)
 				tgt.smoothAt = t
-				if tau <= 0 or not sp or tgt.smoothModel ~= tgt.model then
+				if not sp or tgt.smoothModel ~= tgt.model then
 					sp = { X = raw.X, Y = raw.Y, Z = raw.Z }
 				else
 					local dx, dy, dz = raw.X - sp.X, raw.Y - sp.Y, raw.Z - sp.Z
 					if dx * dx + dy * dy + dz * dz > 400 then
-						sp = { X = raw.X, Y = raw.Y, Z = raw.Z } -- teleport / respawn: snap
+						sp = { X = raw.X, Y = raw.Y, Z = raw.Z }
 					else
-						local a = 1 - math.exp(-math.max(dt, 0) / tau)
-						sp = { X = sp.X + dx * a, Y = sp.Y + dy * a, Z = sp.Z + dz * a }
+						local k = 1 - math.exp(-math.max(dt, 0) / state.smoothing)
+						sp = { X = sp.X + dx * k, Y = sp.Y + dy * k, Z = sp.Z + dz * k }
 					end
 				end
 				tgt.smooth, tgt.smoothModel = sp, tgt.model
@@ -4337,13 +4282,24 @@ function Window:OpenAnimationTracker()
 
 	-- every frame, separate from the UI redraw
 	spawnTask(function()
+		local wasOn = false
 		while tracker.Running do
-			local ok, err = pcall(drawEsp)
-			if not ok and tostring(err) ~= state.espError then
-				state.espError = tostring(err)
-				log("tracker ESP error:", err)
+			if not state.esp or #state.targets == 0 then
+				-- nothing to draw: hide once and check again in a bit (like the Slayer ESP loop)
+				if wasOn then
+					hideFrom(1)
+					wasOn = false
+				end
+				waitTask(0.1)
+			else
+				wasOn = true
+				local ok, err = pcall(drawEsp)
+				if not ok and tostring(err) ~= state.espError then
+					state.espError = tostring(err)
+					log("tracker ESP error:", err)
+				end
+				waitTask()
 			end
-			waitTask()
 		end
 		for _, t in ipairs(espTexts) do
 			pcall(function()
