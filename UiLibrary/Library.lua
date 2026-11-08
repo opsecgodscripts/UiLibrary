@@ -963,6 +963,74 @@ local function loadImage(source, done)
 	end)
 end
 
+--// one loop for everything ----------------------------------------------------
+-- Every window, the tracker ESP and the animation scan run in this single loop
+-- instead of a loop each. Separate loops compete for Matcha's time and each one
+-- lowers the others' rate; one pass per frame does the same work with no contention.
+local Scheduler = { tasks = {}, running = false }
+
+-- interval: nil = every frame, otherwise seconds between runs
+function Scheduler.add(owner, name, fn, interval)
+	local job = { owner = owner, name = name, fn = fn, interval = interval, nextAt = 0 }
+	table.insert(Scheduler.tasks, job)
+	Scheduler.start()
+	return job
+end
+
+function Scheduler.removeOwner(owner)
+	for i = #Scheduler.tasks, 1, -1 do
+		if Scheduler.tasks[i].owner == owner then
+			Scheduler.tasks[i].dead = true
+			table.remove(Scheduler.tasks, i)
+		end
+	end
+end
+
+function Scheduler.frameDelay()
+	local cap
+	for _, w in ipairs(Library._windows or {}) do
+		if w.Running and w._maxFps and (not cap or w._maxFps < cap) then
+			cap = w._maxFps
+		end
+	end
+	return cap and (1 / cap) or nil
+end
+
+function Scheduler.start()
+	if Scheduler.running then
+		return
+	end
+	Scheduler.running = true
+	spawnTask(function()
+		while #Scheduler.tasks > 0 do
+			local t = now()
+			local list = {}
+			for i, job in ipairs(Scheduler.tasks) do
+				list[i] = job
+			end
+			for _, job in ipairs(list) do
+				if not job.dead and (not job.interval or t >= job.nextAt) then
+					if job.interval then
+						job.nextAt = t + job.interval
+					end
+					local ok, err = pcall(job.fn)
+					if not ok and tostring(err) ~= job.lastError then
+						job.lastError = tostring(err)
+						log(job.name .. " error:", err)
+					end
+				end
+			end
+			local delay = Scheduler.frameDelay()
+			if delay then
+				waitTask(delay)
+			else
+				waitTask()
+			end
+		end
+		Scheduler.running = false
+	end)
+end
+
 --// layout constants ---------------------------------------------------------
 -- sizes match the reference layout (450 x 557 window)
 local TOPBAR = 38
@@ -1145,19 +1213,10 @@ function Library:CreateWindow(config)
 		Library.ActiveWindow = self
 	end
 
-	spawnTask(function()
-		while self.Running do
-			local ok, err = pcall(self._frame, self)
-			if not ok and tostring(err) ~= self._lastError then
-				self._lastError = tostring(err)
-				log("render error:", err)
-			end
-			-- redraw every frame (no fixed delay); MaxFps caps it if you want to save CPU
-			if self._maxFps then
-				waitTask(1 / self._maxFps)
-			else
-				waitTask()
-			end
+	-- drawn every frame by the shared loop (MaxFps / the FPS Cap setting limits it)
+	Scheduler.add(self, "render", function()
+		if self.Running then
+			self:_frame()
 		end
 	end)
 
@@ -2377,6 +2436,7 @@ function Window:Destroy()
 	if not self.Running then
 		return
 	end
+	Scheduler.removeOwner(self)
 	for _, child in ipairs(self._children) do
 		pcall(child.Destroy, child)
 	end
@@ -4123,8 +4183,7 @@ function Window:OpenAnimationTracker()
 	updateVisibility()
 
 	-- watch the targets
-	spawnTask(function()
-		while tracker.Running do
+	local function scan()
 			for _, tgt in ipairs(state.targets) do
 				local parentOk = tgt.model and prop(tgt.model, "Parent") ~= nil
 				if not parentOk then
@@ -4154,9 +4213,8 @@ function Window:OpenAnimationTracker()
 					tgt.seen = seenNow
 				end
 			end
-			waitTask(0.05)
-		end
-	end)
+	end
+	Scheduler.add(tracker, "animation scan", scan, 0.05)
 
 	-- ESP: name + distance above the head, playing animations below the feet.
 	-- Its own Drawing objects (not shared with the UI), centered by Drawing itself, whole
@@ -4280,27 +4338,20 @@ function Window:OpenAnimationTracker()
 		hideFrom(used + 1)
 	end
 
-	-- every frame, separate from the UI redraw
-	spawnTask(function()
-		local wasOn = false
-		while tracker.Running do
-			if not state.esp or #state.targets == 0 then
-				-- nothing to draw: hide once and check again in a bit (like the Slayer ESP loop)
-				if wasOn then
-					hideFrom(1)
-					wasOn = false
-				end
-				waitTask(0.1)
-			else
-				wasOn = true
-				local ok, err = pcall(drawEsp)
-				if not ok and tostring(err) ~= state.espError then
-					state.espError = tostring(err)
-					log("tracker ESP error:", err)
-				end
-				waitTask()
+	-- every frame in the shared loop, right after the windows are drawn
+	local wasOn = false
+	Scheduler.add(tracker, "tracker ESP", function()
+		if not state.esp or #state.targets == 0 then
+			if wasOn then
+				hideFrom(1)
+				wasOn = false
 			end
+			return
 		end
+		wasOn = true
+		drawEsp()
+	end)
+	tracker._onClose = function()
 		for _, t in ipairs(espTexts) do
 			pcall(function()
 				t.o.Visible = false
@@ -4309,7 +4360,7 @@ function Window:OpenAnimationTracker()
 				t.o:Remove()
 			end)
 		end
-	end)
+	end
 
 	tracker.State = state
 	return tracker
