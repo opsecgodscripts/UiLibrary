@@ -3981,7 +3981,7 @@ function Window:OpenAnimationTracker()
 	local targetSec = tab:CreateSection({ Name = "Target" })
 	local animSec = tab:CreateSection({ Name = "Animations" })
 
-	local state = { targets = {}, history = {}, printing = false, esp = true, espRate = 240 }
+	local state = { targets = {}, history = {}, printing = false, esp = true, espRate = 240, smoothing = 0.03 }
 	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
 
 	local function playerNames()
@@ -4146,6 +4146,18 @@ function Window:OpenAnimationTracker()
 		end,
 	})
 
+	targetSec:AddSlider({
+		Name = "ESP Smoothing",
+		Min = 0,
+		Max = 150,
+		Default = 30,
+		Increment = 5,
+		Suffix = "ms",
+		Callback = function(ms)
+			state.smoothing = ms / 1000
+		end,
+	})
+
 	list = animSec:AddList({
 		Rows = 6,
 		Empty = "Turn on Tracking to see animations",
@@ -4296,7 +4308,6 @@ function Window:OpenAnimationTracker()
 	-- last position changes, move the label forward at that speed between updates, and
 	-- lightly smooth the small correction when the next real position arrives.
 	local PREDICT_MAX = 0.1 -- never predict further ahead than this (seconds)
-	local SETTLE = 0.03 -- how quickly corrections fade out (seconds)
 	local SNAP = 20 -- teleports / respawns further than this (studs) snap straight there
 	local function predict(tgt, raw, t)
 		local rx, ry, rz = raw.X, raw.Y, raw.Z
@@ -4329,7 +4340,8 @@ function Window:OpenAnimationTracker()
 		-- ease toward it so a correction is spread over a couple of frames
 		local dt = math.max(t - p.at, 0)
 		p.at = t
-		local a = 1 - math.exp(-dt / SETTLE)
+		-- ESP Smoothing slider: how long corrections take to fade out (0 = straight to it)
+		local a = state.smoothing > 0 and (1 - math.exp(-dt / state.smoothing)) or 1
 		p.sx = p.sx + (tx - p.sx) * a
 		p.sy = p.sy + (ty - p.sy) * a
 		p.sz = p.sz + (tz - p.sz) * a
