@@ -66,6 +66,8 @@
 	  Window:OpenAnimationTracker()       -- small window that lists animations a character plays
 	    (also a button in the UI tab). Reads animations with Library.AnimationProvider(model)
 	    if set, else memory_read + offsets (Matcha), else GetPlayingAnimationTracks.
+	    "ESP Rate" sets how often the ESP updates (default 240/s).
+	    Library.MaxRedrawRate (default 360) / Library.IdleRedrawRate (default 30) limit UI redraws.
 	    Library.TrackerIgnore = { ["id"] = true } hides IDs; Library.AnimationNames = { ["id"] = "M1" }
 	    shows names. "Show ESP" draws the target's name and distance above its head and its
 	    playing animations (with time) below its feet.
@@ -1009,9 +1011,11 @@ function Scheduler.start()
 				list[i] = job
 			end
 			for _, job in ipairs(list) do
-				if not job.dead and (not job.interval or t >= job.nextAt) then
-					if job.interval then
-						job.nextAt = t + job.interval
+				local interval = type(job.interval) == "function" and job.interval() or job.interval
+				if not job.dead and (not interval or t >= job.nextAt) then
+					if interval then
+						-- keep a steady rate: schedule from the planned time, not from now
+						job.nextAt = math.max(job.nextAt + interval, t)
 					end
 					local ok, err = pcall(job.fn)
 					if not ok and tostring(err) ~= job.lastError then
@@ -1458,10 +1462,11 @@ function Window:_frame()
 	-- second instead of every frame. Anything interactive redraws at full speed.
 	local moved = self._mouseX ~= self._lastMouseX or self._mouseY ~= self._lastMouseY
 	self._lastMouseX, self._lastMouseY = self._mouseX, self._mouseY
-	local active = moved or down or self._clicked or self._focusedBox or self._listening
-		or #self._notifications > 0 or self._forceRedraw
-	local idleRate = tonumber(Library.IdleRedrawRate) or 30
-	if not active and t - (self._lastDraw or 0) < 1 / idleRate then
+	-- clicks are handled on the frame they happen; everything else is rate limited
+	local urgent = self._clicked or self._forceRedraw
+	local active = moved or down or self._focusedBox or self._listening or #self._notifications > 0
+	local rate = active and (tonumber(Library.MaxRedrawRate) or 360) or (tonumber(Library.IdleRedrawRate) or 30)
+	if not urgent and t - (self._lastDraw or 0) < 1 / rate then
 		self:_housekeeping(t)
 		return
 	end
@@ -2201,6 +2206,7 @@ function Window:SelectTab(tab)
 			self._focusedBox:_unfocus(true)
 		end
 		self._currentTab = tab
+		self._forceRedraw = true
 		self._openDropdown = nil
 		self._overlay = nil
 	end
@@ -2512,6 +2518,7 @@ function Tab:CreateSection(config)
 		_elements = {},
 	}, Section)
 	self._sections[#self._sections + 1] = section
+	self.Window._forceRedraw = true
 	return section
 end
 
@@ -2554,6 +2561,7 @@ end
 function Section:_add(element)
 	element.Section = self
 	element.Window = self.Window
+	self.Window._forceRedraw = true -- show new elements right away
 	element.SetVisible = setVisible
 	self._elements[#self._elements + 1] = element
 	return element
@@ -3973,7 +3981,7 @@ function Window:OpenAnimationTracker()
 	local targetSec = tab:CreateSection({ Name = "Target" })
 	local animSec = tab:CreateSection({ Name = "Animations" })
 
-	local state = { targets = {}, history = {}, printing = false, esp = true, smoothing = 0 }
+	local state = { targets = {}, history = {}, printing = false, esp = true, smoothing = 0, espRate = 240 }
 	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
 
 	local function playerNames()
@@ -4123,6 +4131,18 @@ function Window:OpenAnimationTracker()
 		Default = true,
 		Callback = function(on)
 			state.esp = on
+		end,
+	})
+
+	targetSec:AddSlider({
+		Name = "ESP Rate",
+		Min = 30,
+		Max = 480,
+		Default = 240,
+		Increment = 10,
+		Suffix = "/s",
+		Callback = function(rate)
+			state.espRate = math.max(rate, 1)
 		end,
 	})
 
@@ -4375,6 +4395,8 @@ function Window:OpenAnimationTracker()
 
 	-- every frame in the shared loop, right after the windows are drawn
 	local wasOn = false
+	-- updated espRate times a second, not on every pass of the loop: the loop can run
+	-- tens of thousands of times a second, far more often than the screen refreshes
 	Scheduler.add(tracker, "tracker ESP", function()
 		if not state.esp or #state.targets == 0 then
 			if wasOn then
@@ -4385,6 +4407,8 @@ function Window:OpenAnimationTracker()
 		end
 		wasOn = true
 		drawEsp()
+	end, function()
+		return 1 / state.espRate
 	end)
 	tracker._onClose = function()
 		for _, t in ipairs(espTexts) do
