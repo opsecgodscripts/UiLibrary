@@ -50,7 +50,7 @@ local Window = Library:CreateWindow({
 	Subtitle = "Demo",
 	Logo = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/assets/logo.png",
 	ToggleKey = "RightShift", -- or "Insert", "F1", "K", or a virtual-key number like 0xA1
-	Theme = "Default",        -- starting theme ("Default" or "Tung"); changeable in the UI tab
+	Theme = "Default",        -- starting theme ("Default", "Tung", "Midnight", ...); changeable in the UI tab
 	OnUnload = function()     -- runs when Unload is pressed in the UI tab
 		fpsRunning = false
 	end,
@@ -238,8 +238,43 @@ Options:AddTextbox({
 })
 
 --// Visuals tab --------------------------------------------------------------
-local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Left" })
+-- Multi-section: the names in the header are tabs; click one to show its elements
+local Esp = VisualsTab:CreateMultiSection({ Side = "Left" })
+local Indicators = Esp:AddSection("Indicators")
+local Arrows = Esp:AddSection("OOF Arrow")
+local Radar = Esp:AddSection("Radar")
+
+-- toggles with a colour swatch on the right of the row
+Indicators:AddToggle({ Name = "Distance", Flag = "EspDistance" })
+	:AddColorPicker({ Default = Color3.fromRGB(255, 255, 255), Flag = "EspDistanceColor" })
+Indicators:AddToggle({ Name = "Equipped Item", Flag = "EspItem" })
+	:AddColorPicker({ Default = Color3.fromRGB(255, 255, 255), Flag = "EspItemColor" })
+Indicators:AddToggle({ Name = "Skeleton", Flag = "EspSkeleton" })
+	:AddColorPicker({ Default = Color3.fromRGB(255, 255, 255), Flag = "EspSkeletonColor" })
+Indicators:AddToggle({ Name = "Head Dot", Flag = "EspHeadDot" })
+	:AddColorPicker({
+		Default = Color3.fromRGB(255, 255, 255),
+		Flag = "EspHeadDotColor",
+		Callback = function(color)
+			logChange("Head dot color:", Library.ToHex(color))
+		end,
+	})
+Indicators:AddToggle({ Name = "Head Dot Glow", Flag = "EspHeadDotGlow" })
+Indicators:AddToggle({ Name = "Profile Picture", Flag = "EspProfilePicture" })
+
+Arrows:AddToggle({ Name = "Off-screen Arrows", Flag = "EspArrows" })
+	:AddColorPicker({ Default = Color3.fromRGB(214, 72, 104), Flag = "EspArrowColor" })
+Arrows:AddSlider({ Name = "Arrow Size", Min = 8, Max = 40, Default = 16, Flag = "EspArrowSize" })
+
+Radar:AddToggle({ Name = "Radar", Flag = "EspRadar" })
+-- a colour picker on its own row
+Radar:AddColorPicker({ Name = "Background", Default = Color3.fromRGB(16, 16, 20), Flag = "EspRadarBackground" })
+Radar:AddSlider({ Name = "Radar Range", Min = 50, Max = 500, Default = 200, Suffix = " studs", Flag = "EspRadarRange" })
+
+local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Right" })
 local counterLabel = Info:AddLabel("Button pressed 0 times")
+-- status rows: name on the left, value on the right
+local pressesStatus = Info:AddStatus("Presses", 0)
 local presses = 0
 local counterButton
 counterButton = Info:AddButton({
@@ -247,6 +282,7 @@ counterButton = Info:AddButton({
 	Callback = function()
 		presses = presses + 1
 		counterLabel:Set("Button pressed " .. presses .. " times")
+		pressesStatus:Set(presses)
 		counterButton:SetText("Pressed " .. presses .. "x")
 	end,
 })

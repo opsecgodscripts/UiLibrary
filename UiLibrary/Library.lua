@@ -5,93 +5,96 @@
 	no Instance.new, no TweenService. Everything is redrawn every frame and input
 	is read with ismouse1pressed / iskeypressed.
 
-	Load it straight from GitHub:
+	Load it straight from GitHub (test.lua shows every element):
 
 	  local Library = loadstring(game:HttpGet(
 	      "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/UiLibrary/Library.lua"
 	  ))()
 
-	See test.lua for every element.
+	WINDOW
+	  Library:CreateWindow({ Title, Subtitle, Logo, ToggleKey, Theme, Font, Size, Folder, MaxFps,
+	                         AutoSave, UniversalTab, OnUnload })                      -> Window
+	    Logo       link to a PNG / JPG / WebP, drawn 20 x 20 in the top-left
+	    ToggleKey  "RightShift", "Insert", "F1", "K" ... a virtual-key number (0xA1) or an Enum.KeyCode
+	    Theme      "Default", "Tung", "Dark", "Light", "Midnight", "Ocean", "Forest", "Amethyst",
+	               "Crimson", or a table of colors
+	    Font       "UI" (default), "Plex", "System" or "Monospace"
+	    Size       a width, or Vector2 / UDim2 (default 450 x 557); grows taller only when needed
+	    Folder     where settings are saved (default: the Title)
+	    MaxFps     starting FPS cap (default unlimited); changeable in the UI tab
 
-	API
-	  Library:CreateWindow({ Title, Subtitle, ToggleKey, Size, Theme, Font, Logo })  -> Window
-	    Logo:      link to a PNG / JPG / WebP image, drawn 20 x 20 in the top-left
-	    Font:      "UI" (default), "Plex", "System" or "Monospace"
-	    Theme:     "Default", "Tung", or a table of colors
-	    MaxFps:    starting FPS cap (default: unlimited); changeable in the UI tab
-	  Window:SetFpsCap(number or nil)  -- caps the UI's redraws, and the game via setfpscap if available
-	    ToggleKey: "RightShift", "Insert", "F1", "K" ... or a virtual-key number (0xA1)
-	               or an Enum.KeyCode if the executor has Enum.
-	    Size:      Vector2/UDim2 (default 450 x 557) or just a width. The window grows
-	               taller only if a tab's sections don't fit.
-	    Window:CreateTab({ Name, Icon })            -> Tab
-	    Window:SetStatus(text, connected)           -- footer dot + text
-	    Window:SetTitle(title, subtitle)
-	    Window:Notify(title, text, duration)
-	    Window:SelectTab(tab)
-	    Window:Toggle([visible])
-	    Window:Destroy()
-	    Window.Flags[flag]                          -- current value of every flagged element
+	  Window:CreateTab({ Name, Icon })         Window:SelectTab(tab)     Window:Toggle([visible])
+	  Window:Notify(title, text, duration)     Window:SetStatus(text, connected)
+	  Window:SetTitle(title, subtitle)         Window:SetTheme(name | table)   Window:SetFont(name)
+	  Window:SetToggleKey(key)                 Window:SetFpsCap(number | nil)
+	  Window:OnDestroy(fn)                     -- runs on Unload and when the script is run again
+	  Window:Destroy()                         Window.Flags[flag] -- current value of every flagged element
+	  Window.Running / Window.Visible
 
-	  Tab:CreateSection({ Name, Side = "Left" | "Right" }) -> Section
+	TABS AND SECTIONS
+	  Tab:CreateSection({ Name, Side = "Left" | "Right" })                           -> Section
+	  Tab:CreateMultiSection({ Side })                                              -> MultiSection
+	    MultiSection:AddSection(name) -> Section     (the names are tabs in the header; click to switch)
+	    MultiSection:Select(name | section)          Section:Select()
 	  Tab:Select()
 
-	  Section:AddToggle({ Name, Default, Flag, Callback })              -> :Set(bool) :Get()
-	  Section:AddButton({ Name, Callback })                             -> :SetText(text)
-	  Section:AddLabel(text)                                            -> :Set(text)
-	  Section:AddSlider({ Name, Min, Max, Default, Increment, Suffix, Flag, Callback })
-	                                                                    -> :Set(number) :Get()
+	ELEMENTS (every one has :SetVisible(bool); Set(value, true) changes it without firing Callback)
+	  Section:AddToggle({ Name, Default, Flag, Callback, Keybind, KeybindMode = "Toggle" | "Hold" })
+	                                                                   -> :Set(bool) :Get() :AddColorPicker(config)
+	    The checkbox is on the left; the key box and colour swatches sit on the right of the row.
+	    Keybind = "F" (or "None" to start unbound) flips the toggle even when the UI is hidden.
+	  Section:AddColorPicker({ Name, Default = Color3, Flag, Callback })    -> :Set(Color3) :Get()
+	  Toggle:AddColorPicker({ Default, Flag, Callback })                   -> the same, on the toggle's row
+	    Click the swatch: a panel opens on top with hue / saturation / brightness bars and quick colours.
+	    Flags hold the Color3; settings store it as "#RRGGBB".
+	  Section:AddSlider({ Name, Min, Max, Default, Increment, Suffix, Flag, Callback }) -> :Set(n) :Get()
+	    Click the value to type a number.
 	  Section:AddDropdown({ Name, Options, Default, Multi, Flag, Callback })
-	                                                                    -> :Set(value) :Get() :Refresh(options)
+	                                                                   -> :Set(value) :Get() :Refresh(options, keep)
 	  Section:AddTextbox({ Name, Default, Placeholder, Numeric, MaxLength, ClearOnFocus, Live, Flag, Callback })
-	                                                                    -> :Set(text) :Get()
-	    Callback(text, submitted) fires on Enter or clicking away (every keystroke if Live = true).
-	    Escape cancels the edit. Needs iskeypressed (Matcha has it).
+	                                                                   -> :Set(text) :Get()
+	    Callback(text, submitted) fires on Enter or clicking away (every keystroke with Live = true).
 	  Section:AddKeybind({ Name, Default, Mode = "Press" | "Toggle" | "Hold", Menu, Flag, Callback, ChangedCallback })
-	                                                                    -> :Set(key) :Get() :GetState()
-	    Click the key box, then press a key. Escape cancels, Backspace clears.
-	    Menu = true makes it the show / hide key for the window.
-	  Section:AddToggle({ ..., Keybind = "F", KeybindMode = "Toggle" | "Hold" })
-	    adds a key box next to the checkbox; the key flips the toggle even when the UI is hidden.
+	                                                                   -> :Set(key) :Get() :GetState()
+	    Click the key box, then press a key. Escape cancels, Backspace clears. Menu = true: show / hide key.
+	  Section:AddButton({ Name, Callback })                            -> :SetText(text)
+	  Section:AddLabel(text)                                           -> :Set(text)
+	  Section:AddStatus({ Name, Value })                               -> :Set(value, [color])  "Name ..... value"
+	  Section:AddList({ Rows, Empty, OnClick })                        -> :SetItems({ { Text, Right, Value, Color }, ... })
 
-	  Window:SetTheme("Tung" | "Default" | table)    Window:SetToggleKey(key)
+	  Callbacks only fire when the user changes a value or you call :Set(), not on creation.
 
-	Saving
-	  Every element with a Flag is saved to <Folder>/settings.json and restored the next
-	  time the script runs (Folder defaults to the window Title). Pass Save = false on an
-	  element to skip it, or AutoSave = false to CreateWindow to turn this off.
+	SAVING
+	  Every element with a Flag is saved to <Folder>/settings.json and restored the next time the
+	  script runs. Save = false on an element skips it; Config = false keeps it out of configs;
+	  AutoSave = false on the window turns saving off.
 	  Window:SaveConfig(name) :LoadConfig(name) :RenameConfig(old, new) :DeleteConfig(name)
-	  Window:ListConfigs()     Window:SaveSettings()
-	  Window:AddConfigSection(tab, side)  -- ready-made Save / Load / Rename / Delete / Autoload UI
-	  Window:OpenAnimationTracker()       -- small window that lists animations a character plays
-	    (also a button in the UI tab). Reads animations with Library.AnimationProvider(model)
-	    if set, else memory_read + offsets (Matcha), else GetPlayingAnimationTracks.
-	    "ESP Rate" sets how often the ESP updates (default 240/s).
-	    Library.MaxRedrawRate (default 360) / Library.IdleRedrawRate (default 30) limit UI redraws.
-	    Library.TrackerIgnore = { ["id"] = true } hides IDs; Library.AnimationNames = { ["id"] = "M1" }
-	    shows names. "Show ESP" draws the target's name and distance above its head and its
-	    playing animations (with time) below its feet.
-	  Section:AddList({ Rows, Empty, OnClick }) -> :SetItems({ { Text, Right, Value }, ... })
-	  element:SetVisible(bool) on any element
+	  Window:ListConfigs()  Window:SaveSettings()  Window:AddConfigSection(tab, side)
 
-	Built-in UI tab
-	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, FPS Cap, Show Performance
-	  (a "Title | fps | ping" bar, draggable while the UI is open), Notifications,
-	  Hide UI, Unload and Configs. These are saved between runs but not stored in
-	  configs. CreateWindow options: UniversalTab = false to leave it out, or
-	  UniversalTab = { Name = "Settings", Icon = "@" }; OnUnload = function() end
-	  runs when Unload is pressed. Window.UniversalTab is the tab, so you can add
-	  your own sections to it.
+	BUILT-IN UI TAB
+	  Every window gets a last tab ("UI") with Theme, Font, Menu Key, FPS Cap, Show Performance,
+	  Notifications, Animation Tracker, Hide UI, Unload and Configs. UniversalTab = false leaves it
+	  out; UniversalTab = { Name, Icon } renames it. Window.UniversalTab is the tab.
 
-	Callbacks only fire when the user changes a value or you call :Set(), not when
-	the element is created.
+	ANIMATION TRACKER (Window:OpenAnimationTracker(), also a button in the UI tab)
+	  Lists the animations a character plays and can draw them over the character.
+	  Library.AnimationNames = { ["id"] = "M1" }   names shown next to IDs
+	  Library.TrackerIgnore  = { ["id"] = true }   IDs to hide
+	  Library.AnimationProvider(model)             optional reader: return { { Id, Time, Key }, ... }
+	  Library.CharacterFolders                     workspace folders searched for characters
 
-	Icons are short text. Stick to plain ASCII (">", "+", "*", "#") because the
-	Drawing font may not have symbols or emoji. Image icons are not supported.
+	HELPERS
+	  Library.GetPing() -> ms or nil      Library.GetPlayingAnimations(model)
+	  Library.FindCharacter(name)         Library.FindByPath("Characters/Name")
+	  Library.ToHex(Color3)  Library.FromHex("#RRGGBB")
+	  Library.MaxRedrawRate (360) / Library.IdleRedrawRate (30) limit UI redraws.
+
+	Icons are short text. Stick to plain ASCII (">", "+", "*", "#"): the Drawing font may not have
+	symbols or emoji.
 ]]
 
 local Library = {}
-Library.Version = "2.0.0"
+Library.Version = "2.1.0"
 Library.CharWidth = nil -- override the estimated character width (fraction of text size) if text looks off
 
 --// runtime compatibility ----------------------------------------------------
@@ -158,10 +161,6 @@ local function clamp(v, lo, hi)
 		return hi
 	end
 	return v
-end
-
-local function lerp(a, b, t)
-	return a + (b - a) * t
 end
 
 local function log(...)
@@ -308,6 +307,80 @@ local function buildTheme(theme)
 	end
 	return out
 end
+
+--// colours -------------------------------------------------------------------
+local hexCache = {}
+
+local function toHex(c)
+	return string.format("#%02X%02X%02X", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+
+-- "#RRGGBB" -> Color3; the same object comes back for the same hex, so "did it change" checks stay cheap
+local function fromHex(hex)
+	if type(hex) ~= "string" then
+		return nil
+	end
+	local cached = hexCache[hex]
+	if cached then
+		return cached
+	end
+	local h = hex:gsub("#", "")
+	if #h ~= 6 or not h:match("^%x+$") then
+		return nil
+	end
+	local c = Color3.fromRGB(tonumber(h:sub(1, 2), 16), tonumber(h:sub(3, 4), 16), tonumber(h:sub(5, 6), 16))
+	hexCache[hex] = c
+	return c
+end
+
+local function toHSV(c)
+	local r, g, b = c.R, c.G, c.B
+	local mx, mn = math.max(r, g, b), math.min(r, g, b)
+	local d = mx - mn
+	local h = 0
+	if d > 0 then
+		if mx == r then
+			h = ((g - b) / d) % 6
+		elseif mx == g then
+			h = (b - r) / d + 2
+		else
+			h = (r - g) / d + 4
+		end
+		h = h / 6
+	end
+	return h, mx > 0 and d / mx or 0, mx
+end
+
+local function fromHSV(h, s, v)
+	local i = math.floor(h * 6) % 6
+	local f = h * 6 - math.floor(h * 6)
+	local p, q, t = v * (1 - s), v * (1 - f * s), v * (1 - (1 - f) * s)
+	local r, g, b
+	if i == 0 then
+		r, g, b = v, t, p
+	elseif i == 1 then
+		r, g, b = q, v, p
+	elseif i == 2 then
+		r, g, b = p, v, t
+	elseif i == 3 then
+		r, g, b = p, q, v
+	elseif i == 4 then
+		r, g, b = t, p, v
+	else
+		r, g, b = v, p, q
+	end
+	return Color3.fromRGB(math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
+end
+
+Library.ToHex = toHex
+Library.FromHex = fromHex
+
+-- quick colours in the colour picker panel
+Library.ColorPresets = {
+	Color3.fromRGB(255, 80, 80), Color3.fromRGB(255, 150, 60), Color3.fromRGB(255, 210, 70),
+	Color3.fromRGB(80, 230, 120), Color3.fromRGB(80, 200, 255), Color3.fromRGB(90, 120, 255),
+	Color3.fromRGB(170, 100, 255), Color3.fromRGB(255, 110, 200), Color3.fromRGB(255, 255, 255),
+}
 
 --// text measuring -----------------------------------------------------------
 local function charCount(text)
@@ -1176,6 +1249,10 @@ function Library:CreateWindow(config)
 		_keyPrev = {},
 		_backHeld = 0,
 		_overlay = nil,
+		_openPicker = nil, -- colour picker whose panel is open
+		_pickerPanel = nil,
+		_drawId = 0, -- counts drawn frames (a picker panel closes when its swatch wasn't drawn)
+		_destroyHooks = {},
 		_lastError = nil,
 	}, Window)
 
@@ -1454,6 +1531,9 @@ function Window:_frame()
 		self._dragging = nil
 		self._activeSlider = nil
 		self._activeScroll = nil
+		if self._openPicker then
+			self._openPicker._drag = nil
+		end
 	end
 
 	self:_updateStats(t)
@@ -1473,6 +1553,7 @@ function Window:_frame()
 	self._forceRedraw = false
 	self._dt = math.min(t - (self._lastDraw or t), 0.1)
 	self._lastDraw = t
+	self._drawId = self._drawId + 1
 	for kind in pairs(self._used) do
 		self._used[kind] = 0
 	end
@@ -1482,9 +1563,12 @@ function Window:_frame()
 		self:_handleOverlayClick()
 		self:_drawWindow()
 		self:_drawOverlay()
+		self:_drawPicker()
 	else
 		self._openDropdown = nil
 		self._overlay = nil
+		self._openPicker = nil
+		self._pickerPanel = nil
 		self._perfDrag = nil
 	end
 	if not self.Running then
@@ -1776,6 +1860,9 @@ local function readPing()
 	pingRetryAt = now() + 10 -- nothing works right now; don't try every update
 	return nil
 end
+
+-- your ping in ms (nil if this executor can't read it); Library.PingMethod says which way worked
+Library.GetPing = readPing
 
 local fpsMethodWorks = true
 local function readFps()
@@ -2078,9 +2165,12 @@ function Window:_drawWindow()
 end
 
 --// dropdown overlay ---------------------------------------------------------
--- Clicks for the open dropdown list are handled before anything else is drawn,
--- using the list position from the previous frame, so the list sits "on top".
+-- Clicks for the open dropdown list (and colour picker panel) are handled before anything else
+-- is drawn, using their position from the previous frame, so they sit "on top".
 function Window:_handleOverlayClick()
+	if self:_pickerClick() then
+		return
+	end
 	local o = self._overlay
 	if not o or not self._clicked then
 		return
@@ -2141,6 +2231,112 @@ function Window:_drawOverlay()
 		dropdown = dropdown, x = x, y = y, w = w, h = h, itemH = itemH,
 		boxX = box.x, boxY = box.y, boxW = box.w, boxH = box.h,
 	}
+end
+
+--// colour picker panel --------------------------------------------------------
+-- Drawn on top like the dropdown list. Its clicks are taken before anything else is drawn
+-- (Window:_handleOverlayClick), using the panel position from the previous frame.
+local PANEL_W, PANEL_PAD, BAR_H, BAR_GAP, BAR_SEGMENTS, PRESET = 190, 10, 10, 8, 24, 14
+
+local function inside(px, py, x, y, w, h)
+	return px >= x and px <= x + w and py >= y and py <= y + h
+end
+
+function Window:_drawPicker()
+	local picker = self._openPicker
+	-- closes by itself when its swatch wasn't drawn this frame (tab / section switched, element hidden)
+	if not picker or picker._drawId ~= self._drawId or not picker._anchor then
+		self._openPicker = nil
+		self._pickerPanel = nil
+		return
+	end
+	local th = self.Theme
+	local a = picker._anchor
+	local step = BAR_H + BAR_GAP
+	local w = PANEL_W
+	local h = PANEL_PAD * 2 + step * 3 + PRESET
+	local vw, vh = viewportSize()
+	local x = clamp(a.x + a.w - w, 4, math.max(4, vw - w - 4))
+	local y = a.y + a.h + 6
+	if y + h > vh - 4 then
+		y = a.y - h - 6 -- not enough room below: open upwards
+	end
+	self._pickerPanel = { x = x, y = y, w = w, h = h }
+
+	local ix, iw = x + PANEL_PAD, w - PANEL_PAD * 2
+	local top = y + PANEL_PAD
+	local keys = { "H", "S", "V" }
+	local presets = Library.ColorPresets or {}
+	local gapX = (iw - #presets * PRESET) / math.max(#presets - 1, 1)
+	local presetY = top + step * 3
+
+	-- a click on the panel (recorded before drawing): start dragging a bar or pick a quick colour
+	local click = picker._click
+	picker._click = nil
+	if click then
+		picker._drag = nil
+		for i, key in ipairs(keys) do
+			if inside(click[1], click[2], ix, top + (i - 1) * step - 3, iw, BAR_H + 6) then
+				picker._drag = key
+			end
+		end
+		for i, c in ipairs(presets) do
+			if inside(click[1], click[2], ix + (i - 1) * (PRESET + gapX), presetY, PRESET, PRESET) then
+				picker:Set(c)
+			end
+		end
+	end
+	if picker._drag then
+		if self._down then
+			picker[picker._drag] = clamp((self._mouseX - ix) / iw, 0, 1)
+			-- keeps the chosen hue / saturation even where the colour can't hold them (black, grey)
+			picker:_apply(fromHSV(picker.H, picker.S, picker.V), false)
+		else
+			picker._drag = nil
+		end
+	end
+
+	self:_box(x, y, w, h, th.Section, th.Border, 40, 4)
+	-- the bars are drawn as segments (Drawing has no gradients)
+	local seg = iw / BAR_SEGMENTS
+	for j = 0, BAR_SEGMENTS - 1 do
+		local t = (j + 0.5) / BAR_SEGMENTS
+		local sx = ix + j * seg
+		self:_rect(sx, top, seg + 1, BAR_H, fromHSV(t, 1, 1), 42)
+		self:_rect(sx, top + step, seg + 1, BAR_H, fromHSV(picker.H, t, picker.V), 42)
+		self:_rect(sx, top + step * 2, seg + 1, BAR_H, fromHSV(picker.H, picker.S, t), 42)
+	end
+	for i, key in ipairs(keys) do
+		local mx = ix + math.floor(picker[key] * (iw - 2) + 0.5)
+		local my = top + (i - 1) * step - 2
+		self:_rect(mx - 1, my, 4, BAR_H + 4, th.Section, 43)
+		self:_rect(mx, my + 1, 2, BAR_H + 2, th.Text, 44)
+	end
+	for i, c in ipairs(presets) do
+		local px = ix + (i - 1) * (PRESET + gapX)
+		local hover = self:_over(px, presetY, PRESET, PRESET)
+		self:_box(px, presetY, PRESET, PRESET, c, hover and th.Accent or th.Border, 42, 3)
+	end
+end
+
+-- returns true when the click belonged to the panel
+function Window:_pickerClick()
+	local picker, panel = self._openPicker, self._pickerPanel
+	if not picker or not panel or not self._clicked then
+		return false
+	end
+	if self:_over(panel.x, panel.y, panel.w, panel.h) then
+		picker._click = { self._mouseX, self._mouseY }
+		self._clicked = false
+		return true
+	end
+	local a = picker._anchor
+	if not (a and self:_over(a.x - 3, a.y - 3, a.w + 6, a.h + 6)) then
+		-- clicked somewhere else: close and let the click through (the swatch closes it itself)
+		self._openPicker = nil
+		self._pickerPanel = nil
+	end
+	return false
 end
 
 --// notifications ------------------------------------------------------------
@@ -2209,6 +2405,7 @@ function Window:SelectTab(tab)
 		self._forceRedraw = true
 		self._openDropdown = nil
 		self._overlay = nil
+		self._openPicker = nil
 	end
 end
 
@@ -2224,6 +2421,7 @@ function Window:Toggle(visible)
 		end
 		self._openDropdown = nil
 		self._overlay = nil
+		self._openPicker = nil
 		self._dragging = nil
 		self._activeSlider = nil
 	end
@@ -2256,6 +2454,10 @@ function Window:_snapshot(forConfig)
 		local value = self.Flags[flag]
 		local element = self._saveables[flag]
 		if value ~= nil and not (forConfig and element._noConfig) then
+			-- values JSON can't hold (Color3) are stored in a form it can
+			if element._serialize then
+				value = element:_serialize(value)
+			end
 			data[flag] = value
 		end
 	end
@@ -2438,6 +2640,13 @@ function Window:Notify(title, text, duration)
 	}
 end
 
+-- fn runs when the window goes away: Unload in the UI tab, or the script being run again
+function Window:OnDestroy(fn)
+	if type(fn) == "function" then
+		self._destroyHooks[#self._destroyHooks + 1] = fn
+	end
+end
+
 function Window:Destroy()
 	if not self.Running then
 		return
@@ -2453,7 +2662,9 @@ function Window:Destroy()
 			end
 		end
 	end
-	runCallback(self._onClose)
+	for _, fn in ipairs(self._destroyHooks) do
+		runCallback(fn)
+	end
 	if self._dirty and self._autoSave then
 		pcall(self.SaveSettings, self)
 	end
@@ -2500,7 +2711,7 @@ for _, name in ipairs({ "Toggle", "SetStatus", "SetTitle", "Notify", "Destroy", 
 end
 
 --==============================================================================
--- Tab / Section
+-- Tab / Section / MultiSection
 --==============================================================================
 function Tab:Select()
 	self.Window:SelectTab(self)
@@ -2508,11 +2719,9 @@ end
 
 function Tab:CreateSection(config)
 	config = config or {}
-	local side = config.Side == "Right" and "Right" or "Left"
 	local section = setmetatable({
 		Name = config.Name or "Section",
-		Side = side,
-		Icon = config.Icon,
+		Side = config.Side == "Right" and "Right" or "Left",
 		Tab = self,
 		Window = self.Window,
 		_elements = {},
@@ -2522,35 +2731,154 @@ function Tab:CreateSection(config)
 	return section
 end
 
-function Section:_height(colW)
-	local h = SECTION_HEADER + 8
-	local inner = colW - INSET * 2
+-- background and header strip shared by sections and multi-sections
+local function drawSectionFrame(win, x, y, w, h)
+	local th = win.Theme
+	win:_rect(x, y, w, h, th.Section, 6, 4)
+	win:_rect(x, y, w, SECTION_HEADER, th.SectionHeader or th.Element, 7, 4)
+	win:_rect(x, y + SECTION_HEADER - 4, w, 4, th.SectionHeader or th.Element, 7)
+end
+
+function Section:_bodyHeight(inner)
+	local h = 0
 	for _, el in ipairs(self._elements) do
 		if el.Visible ~= false then
 			h = h + el:_height(inner) + ELEMENT_GAP
 		end
 	end
-	return h + 2
+	return h
+end
+
+function Section:_drawBody(win, x, y, w)
+	for _, el in ipairs(self._elements) do
+		if el.Visible ~= false then
+			local eh = el:_height(w)
+			el:_draw(win, x, y, w, eh)
+			y = y + eh + ELEMENT_GAP
+		end
+	end
+end
+
+function Section:_height(colW)
+	return SECTION_HEADER + 8 + self:_bodyHeight(colW - INSET * 2) + 2
 end
 
 function Section:_draw(win, x, y, w, h)
-	local th = win.Theme
-	-- body, then a lighter header strip across the top
-	win:_rect(x, y, w, h, th.Section, 6, 4)
-	win:_rect(x, y, w, SECTION_HEADER, th.SectionHeader or th.Element, 7, 4)
-	win:_rect(x, y + SECTION_HEADER - 4, w, 4, th.SectionHeader or th.Element, 7)
+	drawSectionFrame(win, x, y, w, h)
+	win:_text(fitText(self.Name, w - INSET * 2, TEXT), x + INSET, y + (SECTION_HEADER - TEXT) / 2, win.Theme.Text, TEXT, 9)
+	self:_drawBody(win, x + INSET, y + SECTION_HEADER + 8, w - INSET * 2)
+end
 
-	local ty = y + (SECTION_HEADER - TEXT) / 2
-	win:_text(fitText(self.Name, w - INSET * 2, TEXT), x + INSET, ty, th.Text, TEXT, 9)
+-- a section inside a multi-section: show it
+function Section:Select()
+	if self.Parent then
+		self.Parent:Select(self)
+	end
+end
 
-	local ey = y + SECTION_HEADER + 8
-	local inner = w - INSET * 2
-	for _, el in ipairs(self._elements) do
-		if el.Visible ~= false then
-			local eh = el:_height(inner)
-			el:_draw(win, x + INSET, ey, inner, eh)
-			ey = ey + eh + ELEMENT_GAP
+-- Multi-section: one box whose header holds several section names; clicking a name shows that
+-- section's elements. Each page is a normal Section (AddToggle, AddSlider, ...).
+local MultiSection = {}
+MultiSection.__index = MultiSection
+
+function Tab:CreateMultiSection(config)
+	config = config or {}
+	local multi = setmetatable({
+		Side = config.Side == "Right" and "Right" or "Left",
+		Tab = self,
+		Window = self.Window,
+		_pages = {},
+		_current = nil,
+	}, MultiSection)
+	self._sections[#self._sections + 1] = multi
+	for _, name in ipairs(config.Sections or {}) do
+		multi:AddSection(name)
+	end
+	self.Window._forceRedraw = true
+	return multi
+end
+
+function MultiSection:AddSection(name)
+	local page = setmetatable({
+		Name = tostring(name or ("Section " .. (#self._pages + 1))),
+		Side = self.Side,
+		Tab = self.Tab,
+		Window = self.Window,
+		Parent = self,
+		_elements = {},
+	}, Section)
+	self._pages[#self._pages + 1] = page
+	self._current = self._current or page
+	self.Window._forceRedraw = true
+	return page
+end
+
+function MultiSection:Select(page)
+	if type(page) == "string" then
+		for _, p in ipairs(self._pages) do
+			if p.Name == page then
+				page = p
+				break
+			end
 		end
+	end
+	if type(page) ~= "table" or page.Parent ~= self or page == self._current then
+		return
+	end
+	local win = self.Window
+	self._current = page
+	if win._focusedBox then
+		win._focusedBox:_unfocus(true)
+	end
+	win._openDropdown = nil
+	win._overlay = nil
+	win._openPicker = nil
+	win._forceRedraw = true
+end
+
+function MultiSection:_height(colW)
+	local page = self._current
+	return SECTION_HEADER + 8 + (page and page:_bodyHeight(colW - INSET * 2) or 0) + 2
+end
+
+function MultiSection:_draw(win, x, y, w, h)
+	local th = win.Theme
+	drawSectionFrame(win, x, y, w, h)
+
+	-- section names in the header; the shown one sits in a darker pill
+	local n = #self._pages
+	local gap, room = 4, w - 12
+	local widths, total = {}, 0
+	for i, page in ipairs(self._pages) do
+		widths[i] = textWidth(page.Name, TEXT) * FIT_MARGIN + 18
+		total = total + widths[i]
+	end
+	total = total + gap * math.max(n - 1, 0)
+	if total > room then
+		local share = (room - gap * (n - 1)) / n
+		for i = 1, n do
+			widths[i] = share
+		end
+	end
+	local px, py, ph = x + 6, y + 4, SECTION_HEADER - 8
+	for i, page in ipairs(self._pages) do
+		local pw = widths[i]
+		local selected = page == self._current
+		local hover = win:_over(px, py, pw, ph)
+		if selected then
+			win:_rect(px, py, pw, ph, th.Section, 8, 4)
+		end
+		local color = (selected or hover) and th.Text or th.TextDim
+		win:_text(fitText(page.Name, pw - 12, TEXT), px + pw / 2, py + (ph - TEXT) / 2 - 1, color, TEXT, 9, "center")
+		page._tabRect = { x = px, y = py, w = pw, h = ph }
+		if win:_clickIn(px, py, pw, ph) then
+			self:Select(page)
+		end
+		px = px + pw + gap
+	end
+
+	if self._current then
+		self._current:_drawBody(win, x + INSET, y + SECTION_HEADER + 8, w - INSET * 2)
 	end
 end
 
@@ -2604,6 +2932,42 @@ function Label:Set(text)
 	self.Text = tostring(text or "")
 end
 
+--// status: "Name ........ value" ------------------------------------------------
+local StatusRow = {}
+StatusRow.__index = StatusRow
+
+-- AddStatus({ Name = "Ping", Value = "-" }) or AddStatus("Ping", "-")
+function Section:AddStatus(config, value)
+	if type(config) ~= "table" then
+		config = { Name = config, Value = value }
+	end
+	return self:_add(setmetatable({
+		Text = tostring(config.Name or "Status"),
+		Value = tostring(config.Value == nil and "-" or config.Value),
+	}, StatusRow))
+end
+
+function StatusRow:_height()
+	return 16
+end
+
+function StatusRow:_draw(win, x, y, w)
+	local th = win.Theme
+	local valueW = math.min(textWidth(self.Value, SMALL) * FIT_MARGIN, w * 0.6)
+	win:_text(fitText(self.Text, w - valueW - 10, SMALL), x, y, th.TextDim, SMALL, 12)
+	win:_text(fitText(self.Value, w * 0.6, SMALL), x + w, y, self.Color or th.Text, SMALL, 12, "right")
+end
+
+-- color is optional (nil = the theme's text color)
+function StatusRow:Set(value, color)
+	self.Value = tostring(value == nil and "-" or value)
+	self.Color = (type(color) == "userdata" or type(color) == "table") and color or nil
+end
+
+function StatusRow:Get()
+	return self.Value
+end
+
 --// button -------------------------------------------------------------------
 local Button = {}
 Button.__index = Button
@@ -2641,8 +3005,13 @@ function Button:SetText(text)
 end
 
 --// toggle -------------------------------------------------------------------
+-- checkbox on the left, name next to it; key box and colour swatches on the right of the row
 local Toggle = {}
 Toggle.__index = Toggle
+
+local ColorPicker = {}
+ColorPicker.__index = ColorPicker
+local newColorPicker -- defined with the colour picker below
 
 function Section:AddToggle(config)
 	config = config or {}
@@ -2651,6 +3020,7 @@ function Section:AddToggle(config)
 		Value = config.Default == true,
 		Flag = config.Flag,
 		Callback = config.Callback,
+		_pickers = {},
 	}, Toggle))
 	self:_setFlag(toggle.Flag, toggle.Value)
 	self:_register(toggle, config)
@@ -2675,6 +3045,16 @@ function Section:AddToggle(config)
 	return toggle
 end
 
+-- a colour swatch on the right of this toggle's row; returns the picker
+function Toggle:AddColorPicker(config)
+	config = config or {}
+	local picker = newColorPicker(self.Section, config)
+	picker.Text = config.Name or (self.Text .. " Color")
+	self._pickers[#self._pickers + 1] = picker
+	self.Window._forceRedraw = true
+	return picker
+end
+
 function Toggle:_height()
 	return 18
 end
@@ -2682,23 +3062,25 @@ end
 function Toggle:_draw(win, x, y, w, h)
 	local th = win.Theme
 	local size = 12
-	local keyW = 0
+
+	-- right side first (swatches at the far right, key box left of them) so they get their own clicks
+	local right = x + w
+	for i = #self._pickers, 1, -1 do
+		right = right - self._pickers[i]:_drawSwatch(win, right, y, h) - 6
+	end
 	if self.Keybind then
-		-- key box sits left of the checkbox and is drawn first so it gets its own clicks
-		keyW = self.Keybind:_drawBox(win, x + w - size - 6, y, h) + 6
+		right = right - self.Keybind:_drawBox(win, right, y, h) - 6
 	end
 
-	local hover = win:_over(x, y, w, h)
-	if win:_clickIn(x, y, w, h) then
+	local hitW = right - x
+	local hover = win:_over(x, y, hitW, h)
+	if win:_clickIn(x, y, hitW, h) then
 		self:Set(not self.Value)
 	end
 
-	local color = self.Value and th.Text or (hover and th.Text or th.TextDim)
-	win:_text(fitText(self.Text, w - 24 - keyW, TEXT), x, y + (h - TEXT) / 2 - 1, color, TEXT, 12)
-
-	local bx, by = x + w - size, y + (h - size) / 2
+	local bx, by = x, y + (h - size) / 2
 	if self.Value then
-		-- glow, accent border, filled box, check mark
+		-- glow, accent box, check mark
 		win:_rect(bx - 2, by - 2, size + 4, size + 4, th.AccentSoft, 10, 5, 0.35)
 		win:_box(bx, by, size, size, th.Accent, th.Accent, 11, 3)
 		win:_rect(bx + 2, by + 2, size - 4, size - 4, th.AccentSoft, 13, 2)
@@ -2706,14 +3088,21 @@ function Toggle:_draw(win, x, y, w, h)
 		win:_line(bx + 3, by + 6, bx + 5, by + 8.5, mark, 1.5, 14)
 		win:_line(bx + 5, by + 8.5, bx + 9, by + 3.5, mark, 1.5, 14)
 	else
-		win:_box(bx, by, size, size, hover and th.ElementHover or th.Element, th.Border, 11, 3)
+		win:_box(bx, by, size, size, hover and th.ElementHover or th.Element, hover and th.TextMuted or th.Border, 11, 3)
 	end
+
+	local color = (self.Value or hover) and th.Text or th.TextDim
+	local textX = x + size + 8
+	win:_text(fitText(self.Text, right - textX - 4, TEXT), textX, y + (h - TEXT) / 2 - 1, color, TEXT, 12)
 end
 
-function Toggle:Set(value)
+-- silent = true: change it without firing Callback
+function Toggle:Set(value, silent)
 	self.Value = value == true
 	self.Section:_setFlag(self.Flag, self.Value)
-	runCallback(self.Callback, self.Value)
+	if not silent then
+		runCallback(self.Callback, self.Value)
+	end
 end
 
 function Toggle:Get()
@@ -2724,6 +3113,109 @@ function Toggle:_restore(value)
 	if type(value) == "boolean" and value ~= self.Value then
 		self:Set(value)
 	end
+end
+
+--// colour picker ----------------------------------------------------------------
+-- A swatch, on its own row (Section:AddColorPicker) or on a toggle's row (Toggle:AddColorPicker).
+-- Clicking it opens a panel on top of the window (Window:_drawPicker) with hue / saturation /
+-- brightness bars and quick colours. Flags hold the Color3; settings store "#RRGGBB".
+local SWATCH = 14
+
+function newColorPicker(section, config) -- assigns the forward-declared local
+	local picker = setmetatable({
+		Text = config.Name or "Color",
+		Flag = config.Flag,
+		Callback = config.Callback,
+		Section = section,
+		Window = section.Window,
+		H = 0,
+		S = 0,
+		V = 1,
+	}, ColorPicker)
+	local default = config.Default
+	if type(default) == "string" then
+		default = fromHex(default)
+	end
+	picker:_apply(default or Color3.fromRGB(255, 255, 255), true, true)
+	section:_register(picker, config)
+	return picker
+end
+
+function Section:AddColorPicker(config)
+	config = config or {}
+	return self:_add(newColorPicker(self, config))
+end
+
+-- resetHSV: recompute hue / saturation / brightness from the colour (the bars set them directly)
+function ColorPicker:_apply(color, resetHSV, silent)
+	if resetHSV then
+		self.H, self.S, self.V = toHSV(color)
+	end
+	local hex = toHex(color)
+	if hex == self._hex then
+		return
+	end
+	self._hex = hex
+	self.Value = fromHex(hex)
+	self.Section:_setFlag(self.Flag, self.Value)
+	if not silent then
+		runCallback(self.Callback, self.Value)
+	end
+end
+
+function ColorPicker:Set(color, silent)
+	if type(color) == "string" then
+		color = fromHex(color)
+	end
+	if color then
+		self:_apply(color, true, silent)
+	end
+end
+
+function ColorPicker:Get()
+	return self.Value
+end
+
+function ColorPicker:_serialize()
+	return self._hex
+end
+
+function ColorPicker:_restore(value)
+	local color = fromHex(value)
+	if color and value ~= self._hex then
+		self:_apply(color, true)
+	end
+end
+
+-- on its own row: name on the left, swatch on the right
+function ColorPicker:_height()
+	return 18
+end
+
+function ColorPicker:_draw(win, x, y, w, h)
+	local swatchW = self:_drawSwatch(win, x + w, y, h)
+	win:_text(fitText(self.Text, w - swatchW - 10, TEXT), x, y + (h - TEXT) / 2 - 1, win.Theme.Text, TEXT, 12)
+end
+
+-- draws the swatch with its right edge at `right`; returns its width
+function ColorPicker:_drawSwatch(win, right, y, h)
+	local th = win.Theme
+	local sx, sy = right - SWATCH, y + (h - SWATCH) / 2
+	self._anchor = { x = sx, y = sy, w = SWATCH, h = SWATCH }
+	self._drawId = win._drawId
+	local open = win._openPicker == self
+	if win:_clickIn(sx - 3, y, SWATCH + 6, h) then
+		open = not open
+		win._openPicker = open and self or nil
+		win._pickerPanel = nil
+		win._openDropdown = nil
+		win._overlay = nil
+		self._drag = nil
+		win._forceRedraw = true
+	end
+	local hover = win:_over(sx - 3, y, SWATCH + 6, h)
+	win:_box(sx, sy, SWATCH, SWATCH, self.Value, (open or hover) and th.Accent or th.Border, 11, 4)
+	return SWATCH
 end
 
 -- give keyboard focus to a textbox or a slider's value
@@ -3272,10 +3764,12 @@ function Textbox:_draw(win, x, y, w)
 	end
 end
 
-function Textbox:Set(text)
+function Textbox:Set(text, silent)
 	self.Value = tostring(text or "")
 	self.Section:_setFlag(self.Flag, self:Get())
-	runCallback(self.Callback, self:Get(), true)
+	if not silent then
+		runCallback(self.Callback, self:Get(), true)
+	end
 end
 
 function Textbox:Get()
@@ -3415,6 +3909,7 @@ function Dropdown:_draw(win, x, y, w)
 	local open = win._openDropdown == self
 	if win:_clickIn(x, boxY, w, boxH) then
 		win._openDropdown = open and nil or self
+		win._openPicker = nil
 		open = not open
 	end
 
@@ -3427,7 +3922,7 @@ function Dropdown:_draw(win, x, y, w)
 	self:_drawGrid(win, x + w - 11, boxY + boxH / 2, th.Accent, 12)
 end
 
-function Dropdown:Set(value)
+function Dropdown:Set(value, silent)
 	if self.Multi then
 		if type(value) ~= "table" then
 			value = value ~= nil and { value } or {}
@@ -3437,7 +3932,9 @@ function Dropdown:Set(value)
 		self.Value = value
 	end
 	self.Section:_setFlag(self.Flag, self:Get())
-	runCallback(self.Callback, self:Get())
+	if not silent then
+		runCallback(self.Callback, self:Get())
+	end
 end
 
 function Dropdown:Get()
@@ -3479,15 +3976,6 @@ function Dropdown:_isSelectedIn(options)
 	end
 	return false
 end
-
--- Matcha can drop the value a loadstring chunk returns, so also expose the
--- library globally. test.lua falls back to this.
-_G.UiLibrary = Library
-pcall(function()
-	if type(getgenv) == "function" then
-		getgenv().UiLibrary = Library
-	end
-end)
 
 --==============================================================================
 -- Built-in "UI" tab: the same in every script (theme, font, menu key, configs)
@@ -3649,7 +4137,7 @@ end
 --==============================================================================
 -- Reading what a character is playing. In order:
 --   1. Library.AnimationProvider(model) if a script sets one; return { { Id = "123", Time = 0.4, Key = track }, ... }
---   2. memory_read + offsets (Matcha), the same way as the Demon://Slayer script
+--   2. memory_read + offsets (Matcha)
 --   3. Animator:GetPlayingAnimationTracks()
 Library.OffsetsUrl = "https://offsets.imtheo.lol/Offsets.json"
 
@@ -3821,6 +4309,9 @@ local function hasHumanoid(model)
 	return child(model, "Humanoid") ~= nil or child(model, "AnimationController") ~= nil
 end
 
+-- workspace folders games keep their characters in; checked in this order
+Library.CharacterFolders = { "Characters", "Alive", "Live", "Entities" }
+
 -- a player's character, wherever it is in workspace
 function Library.FindCharacter(name)
 	local player = child(Players, name)
@@ -3828,8 +4319,14 @@ function Library.FindCharacter(name)
 	if character and hasHumanoid(character) then
 		return character
 	end
-	local alive = child(workspace, "Alive")
-	local direct = child(alive, name) or child(alive, "." .. name) or child(workspace, name)
+	for _, folderName in ipairs(Library.CharacterFolders or {}) do
+		local folder = child(workspace, folderName)
+		local direct = child(folder, name) or child(folder, "." .. name)
+		if direct and hasHumanoid(direct) then
+			return direct
+		end
+	end
+	local direct = child(workspace, name)
 	if direct and hasHumanoid(direct) then
 		return direct
 	end
@@ -3847,7 +4344,7 @@ function Library.FindCharacter(name)
 	return nil
 end
 
--- "Alive/NpcName", "workspace.Alive.NpcName" or just "NpcName"
+-- "Characters/NpcName", "workspace.Characters.NpcName" or just "NpcName"
 function Library.FindByPath(path)
 	path = tostring(path or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	if path == "" then
@@ -3877,12 +4374,16 @@ function Library.FindByPath(path)
 		return current
 	end
 	local found = walk(parts)
-	if not found then
-		local inAlive = { "Alive" }
-		for _, part in ipairs(parts) do
-			inAlive[#inAlive + 1] = part
+	-- "NpcName" alone: also look inside the character folders
+	for _, folderName in ipairs(Library.CharacterFolders or {}) do
+		if found then
+			break
 		end
-		found = walk(inAlive)
+		local inFolder = { folderName }
+		for _, part in ipairs(parts) do
+			inFolder[#inFolder + 1] = part
+		end
+		found = walk(inFolder)
 	end
 	if not found and #parts == 1 then
 		found = Library.FindCharacter(parts[1])
@@ -3890,8 +4391,7 @@ function Library.FindByPath(path)
 	return found
 end
 
--- world -> screen, the same way the Demon://Slayer ESP does it: direct reads (the whole
--- frame runs inside one pcall), camera math by hand, nothing cached between frames
+-- world -> screen: direct reads (the whole frame runs inside one pcall), camera math by hand
 local Cam = { lastFov = nil, tf = 1, slowAt = 0 }
 -- reading game values is the expensive part in Matcha: the camera object, viewport size
 -- and FOV are refreshed twice a second, only the CFrame is read every frame
@@ -4025,7 +4525,7 @@ function Window:OpenAnimationTracker()
 			playerDd:Refresh(playerNames(), true)
 		end,
 	})
-	pathBox = targetSec:AddTextbox({ Name = "Path", Placeholder = "Alive/NpcName" })
+	pathBox = targetSec:AddTextbox({ Name = "Path", Placeholder = "Characters/NpcName" })
 
 	-- who to watch right now: returns a function that finds the model again (respawns)
 	local function resolver()
@@ -4210,50 +4710,50 @@ function Window:OpenAnimationTracker()
 
 	-- watch the targets
 	local function scan()
-			for _, tgt in ipairs(state.targets) do
-				local parentOk = tgt.model and prop(tgt.model, "Parent") ~= nil
-				if not parentOk then
-					-- died / respawned / streamed out: look for it again every second
-					local t = now()
-					if not tgt.lostAt or t - tgt.lostAt > 1 then
-						tgt.lostAt = t
-						tgt.model = tgt.find()
-						tgt.seen = {}
-					end
-				else
-					local seenNow = {}
-					local playing = Library.GetPlayingAnimations(tgt.model)
-					-- steady order so the ESP lines don't swap places between reads
-					table.sort(playing, function(a, b)
-						return tostring(a.Id) < tostring(b.Id)
-					end)
-					tgt.playing = playing
-					-- ESP lines are built here (20x a second), not every frame
-					local lines = {}
-					for i = 1, math.min(#playing, 6) do
-						local anim = playing[i]
-						local name = type(Library.AnimationNames) == "table" and Library.AnimationNames[tostring(anim.Id)]
-						lines[i] = string.format("%s  %.1fs", name and (name .. " " .. anim.Id) or tostring(anim.Id), anim.Time or 0)
-					end
-					if #playing > 6 then
-						lines[#lines + 1] = "+" .. (#playing - 6) .. " more"
-					end
-					if #playing == 0 then
-						lines[1] = "no animations"
-					end
-					tgt.lines = lines
-					tgt.lineCount = #playing
-					for _, anim in ipairs(playing) do
-						local key = anim.Key or anim.Id
-						seenNow[key] = true
-						if not tgt.seen[key] then
-							tgt.seen[key] = true
-							addHistory(tostring(anim.Id), tgt.name, anim.Time)
-						end
-					end
-					tgt.seen = seenNow
+		for _, tgt in ipairs(state.targets) do
+			local parentOk = tgt.model and prop(tgt.model, "Parent") ~= nil
+			if not parentOk then
+				-- died / respawned / streamed out: look for it again every second
+				local t = now()
+				if not tgt.lostAt or t - tgt.lostAt > 1 then
+					tgt.lostAt = t
+					tgt.model = tgt.find()
+					tgt.seen = {}
 				end
+			else
+				local seenNow = {}
+				local playing = Library.GetPlayingAnimations(tgt.model)
+				-- steady order so the ESP lines don't swap places between reads
+				table.sort(playing, function(a, b)
+					return tostring(a.Id) < tostring(b.Id)
+				end)
+				tgt.playing = playing
+				-- ESP lines are built here (20x a second), not every frame
+				local lines = {}
+				for i = 1, math.min(#playing, 6) do
+					local anim = playing[i]
+					local name = type(Library.AnimationNames) == "table" and Library.AnimationNames[tostring(anim.Id)]
+					lines[i] = string.format("%s  %.1fs", name and (name .. " " .. anim.Id) or tostring(anim.Id), anim.Time or 0)
+				end
+				if #playing > 6 then
+					lines[#lines + 1] = "+" .. (#playing - 6) .. " more"
+				end
+				if #playing == 0 then
+					lines[1] = "no animations"
+				end
+				tgt.lines = lines
+				tgt.lineCount = #playing
+				for _, anim in ipairs(playing) do
+					local key = anim.Key or anim.Id
+					seenNow[key] = true
+					if not tgt.seen[key] then
+						tgt.seen[key] = true
+						addHistory(tostring(anim.Id), tgt.name, anim.Time)
+					end
+				end
+				tgt.seen = seenNow
 			end
+		end
 	end
 	Scheduler.add(tracker, "animation scan", scan, 0.05)
 
@@ -4437,7 +4937,7 @@ function Window:OpenAnimationTracker()
 	end, function()
 		return 1 / state.espRate
 	end)
-	tracker._onClose = function()
+	tracker:OnDestroy(function()
 		for _, t in ipairs(espTexts) do
 			pcall(function()
 				t.o.Visible = false
@@ -4446,7 +4946,7 @@ function Window:OpenAnimationTracker()
 				t.o:Remove()
 			end)
 		end
-	end
+	end)
 
 	tracker.State = state
 	return tracker
@@ -4594,5 +5094,14 @@ function Window:AddConfigSection(tab, side)
 
 	return section
 end
+
+-- Matcha can drop the value a loadstring chunk returns, so also expose the
+-- library globally. test.lua falls back to this.
+_G.UiLibrary = Library
+pcall(function()
+	if type(getgenv) == "function" then
+		getgenv().UiLibrary = Library
+	end
+end)
 
 return Library
