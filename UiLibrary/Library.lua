@@ -82,6 +82,10 @@
 	  Library.TrackerIgnore  = { ["id"] = true }   IDs to hide
 	  Library.AnimationProvider(model)             optional reader: return { { Id, Time, Key }, ... }
 	  Library.CharacterFolders                     workspace folders searched for characters
+	  Library.LocalCharacter()                     optional: returns your character, for games that don't
+	                                               name it after your username
+	  Library.ListCharacters()                     optional: { { Name, Model }, ... } of everyone else
+	                                               (the tracker's Player list)
 
 	HELPERS
 	  Library.GetPing() -> ms or nil      Library.GetPlayingAnimations(model)
@@ -4344,6 +4348,42 @@ end
 -- workspace folders games keep their characters in; checked in this order
 Library.CharacterFolders = { "Characters", "Alive", "Live", "Entities" }
 
+-- Games whose character models aren't named after the player can tell the tracker how to find them:
+--   Library.LocalCharacter = function() return yourModel end
+--   Library.ListCharacters = function() return { { Name = "label", Model = model }, ... } end  -- everyone else
+-- Without them it goes by usernames (LocalPlayer.Character, CharacterFolders, workspace.<name>).
+
+-- other characters as { Name, Model } with unique names ("Player", "Player (2)", ...)
+local function listedCharacters()
+	if type(Library.ListCharacters) ~= "function" then
+		return nil
+	end
+	local ok, list = pcall(Library.ListCharacters)
+	if not ok or type(list) ~= "table" then
+		return {}
+	end
+	local out, count = {}, {}
+	for _, c in ipairs(list) do
+		if type(c) == "table" and c.Model then
+			local base = tostring(c.Name or prop(c.Model, "Name") or "?")
+			count[base] = (count[base] or 0) + 1
+			out[#out + 1] = { Name = count[base] > 1 and (base .. " (" .. count[base] .. ")") or base, Model = c.Model }
+		end
+	end
+	return out
+end
+
+local function localCharacter()
+	if type(Library.LocalCharacter) == "function" then
+		local ok, model = pcall(Library.LocalCharacter)
+		if ok and model then
+			return model
+		end
+	end
+	local name = prop(prop(Players, "LocalPlayer"), "Name")
+	return name and Library.FindCharacter(name) or nil
+end
+
 -- a player's character, wherever it is in workspace
 function Library.FindCharacter(name)
 	local player = child(Players, name)
@@ -4518,6 +4558,14 @@ function Window:OpenAnimationTracker()
 
 	local function playerNames()
 		local names = {}
+		local listed = listedCharacters()
+		if listed then
+			-- the game's own character list (Library.ListCharacters)
+			for _, c in ipairs(listed) do
+				names[#names + 1] = c.Name
+			end
+			return names
+		end
 		local ok, players = pcall(function()
 			return Players:GetPlayers()
 		end)
@@ -4564,13 +4612,32 @@ function Window:OpenAnimationTracker()
 		local kind = typeDd:Get()
 		if kind == "LocalPlayer" then
 			local name = prop(prop(Players, "LocalPlayer"), "Name") or "You"
-			return name, function()
-				return Library.FindCharacter(name)
-			end
+			return name, localCharacter
 		elseif kind == "Player" then
 			local name = playerDd:Get()
 			if not name then
 				return nil
+			end
+			if listedCharacters() then
+				-- picked from the game's list: keep watching that model, look it up by name if it's replaced
+				local picked
+				for _, c in ipairs(listedCharacters()) do
+					if c.Name == name then
+						picked = c.Model
+					end
+				end
+				return name, function()
+					if picked and prop(picked, "Parent") ~= nil then
+						return picked
+					end
+					for _, c in ipairs(listedCharacters() or {}) do
+						if c.Name == name then
+							picked = c.Model
+							return picked
+						end
+					end
+					return nil
+				end
 			end
 			return name, function()
 				return Library.FindCharacter(name)
@@ -4587,9 +4654,11 @@ function Window:OpenAnimationTracker()
 
 	local function refreshList()
 		local items = {}
+		local names = type(Library.AnimationNames) == "table" and Library.AnimationNames or {}
 		for i, e in ipairs(state.history) do
 			items[i] = {
-				Text = e.id,
+				-- "Fist M1  555" when the script named it (Library.AnimationNames), otherwise just the id
+				Text = names[e.id] and (names[e.id] .. "  " .. e.id) or e.id,
 				Right = string.format("%s x%d", e.target, e.count),
 				Value = e.id,
 			}
@@ -4899,9 +4968,8 @@ function Window:OpenAnimationTracker()
 		-- your character: looked up once a second, its position read 10x a second (distance)
 		if t >= (state.meAt or 0) then
 			state.meAt = t + 1
-			local lp = Players.LocalPlayer
-			state.me = lp and lp.Character
-			state.myRoot = state.me and state.me:FindFirstChild("HumanoidRootPart")
+			state.me = localCharacter()
+			state.myRoot = state.me and child(state.me, "HumanoidRootPart")
 		end
 		if t >= (state.myPosAt or 0) then
 			state.myPosAt = t + 0.1
