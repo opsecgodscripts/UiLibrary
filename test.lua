@@ -238,38 +238,32 @@ Options:AddTextbox({
 })
 
 --// Visuals tab --------------------------------------------------------------
--- Multi-section: the names in the header are tabs; click one to show its elements
-local Esp = VisualsTab:CreateMultiSection({ Side = "Left" })
-local Indicators = Esp:AddSection("Indicators")
-local Arrows = Esp:AddSection("OOF Arrow")
-local Radar = Esp:AddSection("Radar")
+-- Multi-section: one box with several sections. The names in the header are tabs; click one to show
+-- its elements. Long names wrap onto another header line instead of being cut off.
+local Multi = VisualsTab:CreateMultiSection({ Side = "Left" })
+local PageOne = Multi:AddSection("Page One")
+local PageTwo = Multi:AddSection("Page Two")
+local PageThree = Multi:AddSection("Page Three")
 
--- toggles with a colour swatch on the right of the row
-Indicators:AddToggle({ Name = "Distance", Flag = "EspDistance" })
-	:AddColorPicker({ Default = Color3.fromRGB(255, 255, 255), Flag = "EspDistanceColor" })
-Indicators:AddToggle({ Name = "Equipped Item", Flag = "EspItem" })
-	:AddColorPicker({ Default = Color3.fromRGB(255, 255, 255), Flag = "EspItemColor" })
-Indicators:AddToggle({ Name = "Skeleton", Flag = "EspSkeleton" })
-	:AddColorPicker({ Default = Color3.fromRGB(255, 255, 255), Flag = "EspSkeletonColor" })
-Indicators:AddToggle({ Name = "Head Dot", Flag = "EspHeadDot" })
+-- toggles with a colour swatch on the right of the row (click the swatch to pick a colour)
+PageOne:AddToggle({ Name = "Toggle With Color", Flag = "PageOneToggle" })
 	:AddColorPicker({
 		Default = Color3.fromRGB(255, 255, 255),
-		Flag = "EspHeadDotColor",
+		Flag = "PageOneToggleColor",
 		Callback = function(color)
-			logChange("Head dot color:", Library.ToHex(color))
+			logChange("Toggle color:", Library.ToHex(color))
 		end,
 	})
-Indicators:AddToggle({ Name = "Head Dot Glow", Flag = "EspHeadDotGlow" })
-Indicators:AddToggle({ Name = "Profile Picture", Flag = "EspProfilePicture" })
+PageOne:AddToggle({ Name = "Another Toggle With Color", Flag = "PageOneSecond" })
+	:AddColorPicker({ Default = Color3.fromRGB(214, 72, 104), Flag = "PageOneSecondColor" })
+PageOne:AddToggle({ Name = "Toggle Without Color", Flag = "PageOneThird" })
 
-Arrows:AddToggle({ Name = "Off-screen Arrows", Flag = "EspArrows" })
-	:AddColorPicker({ Default = Color3.fromRGB(214, 72, 104), Flag = "EspArrowColor" })
-Arrows:AddSlider({ Name = "Arrow Size", Min = 8, Max = 40, Default = 16, Flag = "EspArrowSize" })
+PageTwo:AddToggle({ Name = "Example Toggle", Flag = "PageTwoToggle" })
+PageTwo:AddSlider({ Name = "Example Slider", Min = 0, Max = 100, Default = 50, Flag = "PageTwoSlider" })
 
-Radar:AddToggle({ Name = "Radar", Flag = "EspRadar" })
 -- a colour picker on its own row
-Radar:AddColorPicker({ Name = "Background", Default = Color3.fromRGB(16, 16, 20), Flag = "EspRadarBackground" })
-Radar:AddSlider({ Name = "Radar Range", Min = 50, Max = 500, Default = 200, Suffix = " studs", Flag = "EspRadarRange" })
+PageThree:AddColorPicker({ Name = "Example Color", Default = Color3.fromRGB(80, 200, 255), Flag = "PageThreeColor" })
+PageThree:AddDropdown({ Name = "Example Dropdown", Options = { "One", "Two", "Three" }, Default = "One", Flag = "PageThreeDropdown" })
 
 local Info = VisualsTab:CreateSection({ Name = "Info", Side = "Right" })
 local counterLabel = Info:AddLabel("Button pressed 0 times")

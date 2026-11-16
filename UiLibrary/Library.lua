@@ -2732,11 +2732,12 @@ function Tab:CreateSection(config)
 end
 
 -- background and header strip shared by sections and multi-sections
-local function drawSectionFrame(win, x, y, w, h)
+local function drawSectionFrame(win, x, y, w, h, headerH)
 	local th = win.Theme
+	headerH = headerH or SECTION_HEADER
 	win:_rect(x, y, w, h, th.Section, 6, 4)
-	win:_rect(x, y, w, SECTION_HEADER, th.SectionHeader or th.Element, 7, 4)
-	win:_rect(x, y + SECTION_HEADER - 4, w, 4, th.SectionHeader or th.Element, 7)
+	win:_rect(x, y, w, headerH, th.SectionHeader or th.Element, 7, 4)
+	win:_rect(x, y + headerH - 4, w, 4, th.SectionHeader or th.Element, 7)
 end
 
 function Section:_bodyHeight(inner)
@@ -2836,49 +2837,71 @@ function MultiSection:Select(page)
 	win._forceRedraw = true
 end
 
+-- Lays the section names out in the header. They keep their full names: normal text if they fit on
+-- one line, smaller text if that makes them fit, otherwise they wrap onto more lines. Only a name
+-- wider than the whole header is cut short with "...".
+local TAB_ROW = 22 -- height of each extra header line
+local TAB_PAD = 14 -- space around a name inside its pill
+local TAB_GAP = 2
+
+function MultiSection:_layout(w)
+	local room = w - 12
+	local function measure(size)
+		local widths, total = {}, 0
+		for i, page in ipairs(self._pages) do
+			widths[i] = math.min(textWidth(page.Name, size) * FIT_MARGIN + TAB_PAD, room)
+			total = total + widths[i] + (i > 1 and TAB_GAP or 0)
+		end
+		return widths, total
+	end
+	local size = TEXT
+	local widths, total = measure(size)
+	if total > room then
+		size = SMALL
+		widths = measure(size)
+	end
+	local items, row, cx = {}, 0, 0
+	for i, page in ipairs(self._pages) do
+		if cx > 0 and cx + widths[i] > room then
+			row, cx = row + 1, 0
+		end
+		items[i] = { page = page, x = cx, row = row, w = widths[i] }
+		cx = cx + widths[i] + TAB_GAP
+	end
+	return items, size, SECTION_HEADER + row * TAB_ROW
+end
+
 function MultiSection:_height(colW)
+	local _, _, headerH = self:_layout(colW)
 	local page = self._current
-	return SECTION_HEADER + 8 + (page and page:_bodyHeight(colW - INSET * 2) or 0) + 2
+	return headerH + 8 + (page and page:_bodyHeight(colW - INSET * 2) or 0) + 2
 end
 
 function MultiSection:_draw(win, x, y, w, h)
 	local th = win.Theme
-	drawSectionFrame(win, x, y, w, h)
+	local items, size, headerH = self:_layout(w)
+	drawSectionFrame(win, x, y, w, h, headerH)
 
 	-- section names in the header; the shown one sits in a darker pill
-	local n = #self._pages
-	local gap, room = 4, w - 12
-	local widths, total = {}, 0
-	for i, page in ipairs(self._pages) do
-		widths[i] = textWidth(page.Name, TEXT) * FIT_MARGIN + 18
-		total = total + widths[i]
-	end
-	total = total + gap * math.max(n - 1, 0)
-	if total > room then
-		local share = (room - gap * (n - 1)) / n
-		for i = 1, n do
-			widths[i] = share
-		end
-	end
-	local px, py, ph = x + 6, y + 4, SECTION_HEADER - 8
-	for i, page in ipairs(self._pages) do
-		local pw = widths[i]
+	local ph = SECTION_HEADER - 8
+	for _, item in ipairs(items) do
+		local page = item.page
+		local px, py, pw = x + 6 + item.x, y + 4 + item.row * TAB_ROW, item.w
 		local selected = page == self._current
 		local hover = win:_over(px, py, pw, ph)
 		if selected then
 			win:_rect(px, py, pw, ph, th.Section, 8, 4)
 		end
 		local color = (selected or hover) and th.Text or th.TextDim
-		win:_text(fitText(page.Name, pw - 12, TEXT), px + pw / 2, py + (ph - TEXT) / 2 - 1, color, TEXT, 9, "center")
+		win:_text(fitText(page.Name, pw - 6, size), px + pw / 2, py + (ph - size) / 2 - 1, color, size, 9, "center")
 		page._tabRect = { x = px, y = py, w = pw, h = ph }
 		if win:_clickIn(px, py, pw, ph) then
 			self:Select(page)
 		end
-		px = px + pw + gap
 	end
 
 	if self._current then
-		self._current:_drawBody(win, x + INSET, y + SECTION_HEADER + 8, w - INSET * 2)
+		self._current:_drawBody(win, x + INSET, y + headerH + 8, w - INSET * 2)
 	end
 end
 
