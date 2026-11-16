@@ -2846,21 +2846,27 @@ local TAB_GAP = 2
 
 function MultiSection:_layout(w)
 	local room = w - 12
-	local function measure(size)
+	-- plain estimate (no FIT_MARGIN slack): it already runs a little wide
+	local function measure(size, pad)
 		local widths, total = {}, 0
 		for i, page in ipairs(self._pages) do
-			-- plain estimate here (no FIT_MARGIN slack): it already runs a little wide, and the slack
-			-- made names that fit easily wrap onto a second line
-			widths[i] = math.min(textWidth(page.Name, size) + TAB_PAD, room)
+			widths[i] = math.min(textWidth(page.Name, size) + pad, room)
 			total = total + widths[i] + (i > 1 and TAB_GAP or 0)
 		end
 		return widths, total
 	end
-	local size = TEXT
-	local widths, total = measure(size)
+	-- one line if at all possible: normal text, then smaller text, then tighter pills
+	local size, widths, total
+	for _, try in ipairs({ { TEXT, TAB_PAD }, { SMALL, TAB_PAD }, { 11, TAB_PAD }, { 11, 6 } }) do
+		size = try[1]
+		widths, total = measure(try[1], try[2])
+		if total <= room then
+			break
+		end
+	end
 	if total > room then
-		size = SMALL
-		widths = measure(size)
+		size = SMALL -- several lines: readable size
+		widths = measure(size, TAB_PAD)
 	end
 	local items, row, cx = {}, 0, 0
 	for i, page in ipairs(self._pages) do

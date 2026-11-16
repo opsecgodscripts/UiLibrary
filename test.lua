@@ -12,7 +12,8 @@
 -- failure below prints a message and returns.
 local warn = warn or print
 local URL = "https://raw.githubusercontent.com/opsecgodscripts/UiLibrary/refs/heads/main/UiLibrary/Library.lua"
-local source = game:HttpGet(URL)
+-- "?t=..." skips GitHub's cache, which can hand out the old file for a few minutes after a push
+local source = game:HttpGet(URL .. "?t=" .. tostring(os.time()))
 if type(source) ~= "string" or #source < 100 then
 	warn("UiLibrary: download failed, got " .. tostring(source))
 	return
