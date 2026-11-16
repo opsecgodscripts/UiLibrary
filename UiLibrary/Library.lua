@@ -2841,7 +2841,7 @@ end
 -- one line, smaller text if that makes them fit, otherwise they wrap onto more lines. Only a name
 -- wider than the whole header is cut short with "...".
 local TAB_ROW = 22 -- height of each extra header line
-local TAB_PAD = 14 -- space around a name inside its pill
+local TAB_PAD = 12 -- space around a name inside its pill
 local TAB_GAP = 2
 
 function MultiSection:_layout(w)
@@ -2849,7 +2849,9 @@ function MultiSection:_layout(w)
 	local function measure(size)
 		local widths, total = {}, 0
 		for i, page in ipairs(self._pages) do
-			widths[i] = math.min(textWidth(page.Name, size) * FIT_MARGIN + TAB_PAD, room)
+			-- plain estimate here (no FIT_MARGIN slack): it already runs a little wide, and the slack
+			-- made names that fit easily wrap onto a second line
+			widths[i] = math.min(textWidth(page.Name, size) + TAB_PAD, room)
 			total = total + widths[i] + (i > 1 and TAB_GAP or 0)
 		end
 		return widths, total
@@ -2865,7 +2867,7 @@ function MultiSection:_layout(w)
 		if cx > 0 and cx + widths[i] > room then
 			row, cx = row + 1, 0
 		end
-		items[i] = { page = page, x = cx, row = row, w = widths[i] }
+		items[i] = { page = page, x = cx, row = row, w = widths[i], cut = widths[i] >= room }
 		cx = cx + widths[i] + TAB_GAP
 	end
 	return items, size, SECTION_HEADER + row * TAB_ROW
@@ -2893,7 +2895,8 @@ function MultiSection:_draw(win, x, y, w, h)
 			win:_rect(px, py, pw, ph, th.Section, 8, 4)
 		end
 		local color = (selected or hover) and th.Text or th.TextDim
-		win:_text(fitText(page.Name, pw - 6, size), px + pw / 2, py + (ph - size) / 2 - 1, color, size, 9, "center")
+		local name = item.cut and fitText(page.Name, pw - 6, size) or page.Name
+		win:_text(name, px + pw / 2, py + (ph - size) / 2 - 1, color, size, 9, "center")
 		page._tabRect = { x = px, y = py, w = pw, h = ph }
 		if win:_clickIn(px, py, pw, ph) then
 			self:Select(page)
