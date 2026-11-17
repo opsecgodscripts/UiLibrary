@@ -4484,6 +4484,14 @@ function Library.FindByPath(path)
 	if not found and #parts == 1 then
 		found = Library.FindCharacter(parts[1])
 	end
+	-- a name with a dot in it ("Lesser Skeleton.7"): try the whole thing as one name, in workspace and
+	-- the character folders
+	if not found and not path:find("/") and path:find("%.") then
+		found = child(workspace, path)
+		for _, folderName in ipairs(Library.CharacterFolders or {}) do
+			found = found or child(child(workspace, folderName), path)
+		end
+	end
 	return found
 end
 
