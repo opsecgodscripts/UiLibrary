@@ -54,6 +54,8 @@
 	  Section:AddTextbox({ Name, Default, Placeholder, Numeric, MaxLength, ClearOnFocus, Live, Flag, Callback })
 	                                                                   -> :Set(text) :Get()
 	    Callback(text, submitted) fires on Enter or clicking away (every keystroke with Live = true).
+	    Click or drag to place the caret / highlight; arrows, Home, End, Delete; Shift extends the selection;
+	    Ctrl+A / C / X / V (paste needs an executor that can read the clipboard).
 	  Section:AddKeybind({ Name, Default, Mode = "Press" | "Toggle" | "Hold", Menu, Flag, Callback, ChangedCallback })
 	                                                                   -> :Set(key) :Get() :GetState()
 	    Click the key box, then press a key. Escape cancels, Backspace clears. Menu = true: show / hide key.
@@ -84,8 +86,10 @@
 	  Library.CharacterFolders                     workspace folders searched for characters
 	  Library.LocalCharacter()                     optional: returns your character, for games that don't
 	                                               name it after your username
-	  Library.ListCharacters()                     optional: { { Name, Model }, ... } of everyone else
+	  Library.ListCharacters()                     optional: { { Name, Model }, ... } of the other players
 	                                               (the tracker's Player list)
+	  Library.ListNPCs()                           optional: the same for NPCs (the tracker's NPC list;
+	                                               default: non-players in the CharacterFolders)
 
 	HELPERS
 	  Library.GetPing() -> ms or nil      Library.GetPlayingAnimations(model)
@@ -670,6 +674,43 @@ TypingKeys[0x6E] = { ".", "." }
 TypingKeys[0x6F] = { "/", "/" }
 
 local VK_BACK, VK_ENTER, VK_ESCAPE = 0x08, 0x0D, 0x1B
+local VK_DELETE, VK_LEFT, VK_RIGHT, VK_HOME, VK_END = 0x2E, 0x25, 0x27, 0x24, 0x23
+local REPEAT_KEYS = { VK_BACK, VK_DELETE, VK_LEFT, VK_RIGHT } -- repeat while held
+
+--// clipboard ----------------------------------------------------------------
+local function clipboardFn(names)
+	for _, name in ipairs(names) do
+		local fn = rawget(_G, name)
+		if type(fn) ~= "function" and type(getgenv) == "function" then
+			fn = rawget(getgenv(), name)
+		end
+		if type(fn) ~= "function" and type(getfenv) == "function" then
+			local ok, env = pcall(getfenv, 0)
+			if ok and type(env) == "table" then
+				fn = rawget(env, name)
+			end
+		end
+		if type(fn) == "function" then
+			return fn
+		end
+	end
+	return nil
+end
+
+local function copyText(text)
+	local fn = clipboardFn({ "setclipboard", "toclipboard", "set_clipboard", "writeclipboard" })
+	return fn ~= nil and pcall(fn, text)
+end
+
+-- nil when the executor can't read the clipboard
+local function readClipboard()
+	local fn = clipboardFn({ "getclipboard", "fromclipboard", "get_clipboard", "readclipboard" })
+	if not fn then
+		return nil
+	end
+	local ok, text = pcall(fn)
+	return ok and type(text) == "string" and text or nil
+end
 
 --// input --------------------------------------------------------------------
 local Input = {}
@@ -736,6 +777,10 @@ end
 
 function Input.shift()
 	return Input.vk(0x10) or Input.vk(0xA0) or Input.vk(0xA1)
+end
+
+function Input.ctrl()
+	return Input.vk(0x11) or Input.vk(0xA2) or Input.vk(0xA3)
 end
 
 function Input.focused()
@@ -1251,7 +1296,7 @@ function Library:CreateWindow(config)
 		_imageData = setmetatable({}, { __mode = "k" }),
 		_props = setmetatable({}, { __mode = "k" }),
 		_keyPrev = {},
-		_backHeld = 0,
+		_held = {}, -- repeating keys (Backspace, Delete, arrows) -> time held
 		_overlay = nil,
 		_openPicker = nil, -- colour picker whose panel is open
 		_pickerPanel = nil,
@@ -1422,6 +1467,7 @@ function Window:_text(str, x, y, color, size, z, align, alpha, outline)
 	setProp(o, c, "Transparency", alpha or 1)
 	setProp(o, c, "ZIndex", (z or 5) + self._zBase)
 	setVec(o, c, "Position", math.floor(x + 0.5), math.floor(y + 0.5))
+	return o
 end
 
 function Window:_line(x1, y1, x2, y2, color, thickness, z, alpha)
@@ -1718,6 +1764,26 @@ function Window:_pressed(code)
 	return down and not was
 end
 
+-- runs fn once when the key goes down, then repeats while it's held
+function Window:_repeatKey(code, fn)
+	if not Input.vk(code) then
+		self._held[code] = nil
+		return
+	end
+	local held = self._held[code]
+	if held == nil then
+		fn()
+		self._held[code] = 0
+	else
+		held = held + self._dt
+		if held > 0.4 then
+			fn()
+			held = 0.4 - 0.035
+		end
+		self._held[code] = held
+	end
+end
+
 function Window:_type()
 	local box = self._focusedBox
 	if not box then
@@ -1733,26 +1799,48 @@ function Window:_type()
 		return
 	end
 
-	-- backspace: once on press, then repeats while held
-	local back = Input.vk(VK_BACK)
-	if back then
-		if self._backHeld == 0 then
-			box:_backspace()
-			self._backHeld = 0.0001
-		else
-			self._backHeld = self._backHeld + self._dt
-			if self._backHeld > 0.4 then
-				box:_backspace()
-				self._backHeld = 0.4 - 0.035
-			end
+	-- text boxes also have a caret, selection and clipboard; the slider's number entry only types
+	local editable = box._moveTo ~= nil
+	local shift, ctrl = Input.shift(), Input.ctrl()
+	if editable and ctrl then
+		if self:_pressed(0x41) then -- Ctrl+A
+			box:_selectAll()
 		end
-	else
-		self._backHeld = 0
+		if self:_pressed(0x43) then -- Ctrl+C
+			box:_copy()
+		end
+		if self:_pressed(0x58) then -- Ctrl+X
+			box:_cut()
+		end
+		if self:_pressed(0x56) then -- Ctrl+V
+			box:_paste()
+		end
 	end
 
-	local shift = Input.shift()
+	self:_repeatKey(VK_BACK, function()
+		box:_backspace()
+	end)
+	if editable then
+		self:_repeatKey(VK_DELETE, function()
+			box:_delete()
+		end)
+		self:_repeatKey(VK_LEFT, function()
+			box:_move(-1, shift)
+		end)
+		self:_repeatKey(VK_RIGHT, function()
+			box:_move(1, shift)
+		end)
+		if self:_pressed(VK_HOME) then
+			box:_moveTo(0, shift)
+		end
+		if self:_pressed(VK_END) then
+			box:_moveTo(#box.Value, shift)
+		end
+	end
+
 	for code, chars in pairs(TypingKeys) do
-		if self:_pressed(code) then
+		-- checked even while Ctrl is held, so letters of a shortcut don't type once Ctrl is let go
+		if self:_pressed(code) and not ctrl then
 			box:_insert(shift and chars[2] or chars[1])
 		end
 	end
@@ -3291,7 +3379,15 @@ local function focusTarget(win, target)
 	end
 	win._keyPrev[VK_ENTER] = Input.vk(VK_ENTER)
 	win._keyPrev[VK_ESCAPE] = Input.vk(VK_ESCAPE)
-	win._backHeld = Input.vk(VK_BACK) and 1 or 0
+	-- keys already held when focusing don't act until they're let go
+	win._held = {}
+	for _, code in ipairs(REPEAT_KEYS) do
+		if Input.vk(code) then
+			win._held[code] = -math.huge
+		end
+	end
+	win._keyPrev[VK_HOME] = Input.vk(VK_HOME)
+	win._keyPrev[VK_END] = Input.vk(VK_END)
 end
 
 --// slider -------------------------------------------------------------------
@@ -3695,6 +3791,10 @@ end
 local Textbox = {}
 Textbox.__index = Textbox
 
+-- When the executor can't report how wide drawn text really is (TextBounds), the width estimate is
+-- scaled by this; the estimate runs a little wide, which put the caret ahead of the text.
+local TEXT_SCALE_FALLBACK = 0.88
+
 function Section:AddTextbox(config)
 	config = config or {}
 	local box = self:_add(setmetatable({
@@ -3707,6 +3807,9 @@ function Section:AddTextbox(config)
 		Live = config.Live == true, -- fire Callback on every keystroke instead of on Enter / click away
 		Flag = config.Flag,
 		Callback = config.Callback,
+		_caret = 0, -- caret position (characters before it)
+		_anchor = nil, -- other end of the selection, or nil
+		_scroll = 0, -- first character shown when the text is wider than the box
 	}, Textbox))
 	self:_setFlag(box.Flag, box:Get())
 	self:_register(box, config)
@@ -3730,6 +3833,7 @@ function Textbox:_focus()
 	if self.ClearOnFocus then
 		self.Value = ""
 	end
+	self._caret, self._anchor = #self.Value, nil
 	focusTarget(self.Window, self)
 end
 
@@ -3739,6 +3843,7 @@ function Textbox:_unfocus(submit)
 		return
 	end
 	win._focusedBox = nil
+	self._anchor, self._dragging = nil, false
 	if not submit then
 		self.Value = self._before or self.Value -- Escape: undo the edit
 		self.Section:_setFlag(self.Flag, self:Get())
@@ -3754,40 +3859,195 @@ function Textbox:_unfocus(submit)
 end
 
 function Textbox:_changed()
+	self._typedAt = now()
 	self.Section:_setFlag(self.Flag, self:Get())
 	if self.Live then
 		runCallback(self.Callback, self:Get(), false)
 	end
 end
 
-function Textbox:_insert(char)
-	if #self.Value >= self.MaxLength then
+--// editing (positions are byte positions; typed and pasted text is kept to plain characters)
+function Textbox:_selection()
+	if self._anchor and self._anchor ~= self._caret then
+		return math.min(self._anchor, self._caret), math.max(self._anchor, self._caret)
+	end
+	return nil
+end
+
+-- removes the selection; true when there was one
+function Textbox:_deleteSelection()
+	local a, b = self:_selection()
+	if not a then
+		self._anchor = nil
+		return false
+	end
+	self.Value = self.Value:sub(1, a) .. self.Value:sub(b + 1)
+	self._caret, self._anchor = a, nil
+	return true
+end
+
+function Textbox:_insert(text)
+	text = tostring(text or ""):gsub("[\r\n\t]", " "):gsub("[^\32-\126]", "")
+	if self.Numeric then
+		text = text:gsub("[^%d%.%-]", "")
+	end
+	local hadSelection = self:_deleteSelection()
+	local room = self.MaxLength - #self.Value
+	if room <= 0 or text == "" then
+		if hadSelection then
+			self:_changed()
+		end
 		return
 	end
-	if self.Numeric and not char:match("[%d%.%-]") then
-		return
-	end
-	self.Value = self.Value .. char
+	text = text:sub(1, room)
+	local c = self._caret
+	self.Value = self.Value:sub(1, c) .. text .. self.Value:sub(c + 1)
+	self._caret = c + #text
 	self:_changed()
 end
 
 function Textbox:_backspace()
-	if self.Value == "" then
+	if not self:_deleteSelection() then
+		local c = self._caret
+		if c <= 0 then
+			return
+		end
+		self.Value = self.Value:sub(1, c - 1) .. self.Value:sub(c + 1)
+		self._caret = c - 1
+	end
+	self:_changed()
+end
+
+function Textbox:_delete()
+	if not self:_deleteSelection() then
+		local c = self._caret
+		if c >= #self.Value then
+			return
+		end
+		self.Value = self.Value:sub(1, c) .. self.Value:sub(c + 2)
+	end
+	self:_changed()
+end
+
+-- extend = Shift held: move the caret and grow the selection
+function Textbox:_moveTo(pos, extend)
+	pos = math.max(0, math.min(#self.Value, pos))
+	if extend then
+		self._anchor = self._anchor or self._caret
+	else
+		self._anchor = nil
+	end
+	self._caret = pos
+	self._typedAt = now()
+end
+
+function Textbox:_move(dir, extend)
+	local a, b = self:_selection()
+	if a and not extend then
+		-- arrow with a selection: jump to that end of it
+		self:_moveTo(dir < 0 and a or b, false)
 		return
 	end
-	self.Value = charSub(self.Value, charCount(self.Value) - 1)
-	self:_changed()
+	self:_moveTo(self._caret + dir, extend)
+end
+
+function Textbox:_selectAll()
+	self._anchor, self._caret = 0, #self.Value
+end
+
+function Textbox:_copy()
+	local a, b = self:_selection()
+	local text = a and self.Value:sub(a + 1, b) or self.Value
+	if text ~= "" then
+		copyText(text)
+	end
+end
+
+function Textbox:_cut()
+	local a = self:_selection()
+	if a then
+		self:_copy()
+		self:_deleteSelection()
+		self:_changed()
+	end
+end
+
+function Textbox:_paste()
+	local text = readClipboard()
+	if text then
+		self:_insert(text)
+	elseif not Library._pasteWarned then
+		Library._pasteWarned = true
+		self.Window:Notify("Paste", "This executor can't read the clipboard.", 3)
+	end
 end
 
 function Textbox:_draw(win, x, y, w)
 	local th = win.Theme
 	local boxY, boxH = y + LABEL_GAP, 22
 	local focused = win._focusedBox == self
+	local inner = w - 16
+	local textX = x + 7
+	local textY = boxY + (boxH - SMALL) / 2 - 1
+	local value = self.Value
+
+	-- widths of drawn text: the estimate, corrected by what the text really measured last frame
+	local scale = self._scale or TEXT_SCALE_FALLBACK
+	local function width(str)
+		return textWidth(str, SMALL) * scale
+	end
+
+	-- which part of the text fits: keep the caret in view while typing
+	local room = inner - 4
+	local first, last = 0, #value
+	if focused then
+		self._caret = math.max(0, math.min(#value, self._caret or #value))
+		first = math.max(0, math.min(self._scroll or 0, self._caret))
+		while first < self._caret and width(value:sub(first + 1, self._caret)) > room do
+			first = first + 1
+		end
+		last = first
+		while last < #value and width(value:sub(first + 1, last + 1)) <= room do
+			last = last + 1
+		end
+		self._scroll = first
+	end
+	local function caretX(pos)
+		return textX + width(value:sub(first + 1, math.max(first, math.min(pos, last))))
+	end
+	-- character position nearest to the mouse
+	local function posAt(mx)
+		local best, bestD = first, math.huge
+		for pos = first, last do
+			local d = math.abs(caretX(pos) - mx)
+			if d < bestD then
+				best, bestD = pos, d
+			end
+		end
+		return best
+	end
 
 	self._rect = { x = x, y = boxY, w = w, h = boxH }
-	if win:_clickIn(x, boxY, w, boxH) and not focused then
-		self:_focus()
-		focused = true
+	if win:_clickIn(x, boxY, w, boxH) then
+		if not focused then
+			self:_focus()
+			focused = true
+		else
+			-- click inside: put the caret there and start a drag selection
+			self._caret = posAt(win._mouseX)
+			self._anchor = self._caret
+			self._dragging = true
+		end
+	end
+	if focused and self._dragging then
+		if win._down then
+			self._caret = posAt(win._mouseX)
+		else
+			self._dragging = false
+			if self._anchor == self._caret then
+				self._anchor = nil
+			end
+		end
 	end
 
 	win:_text(fitText(self.Text, w, TEXT), x, y, th.Text, TEXT, 12)
@@ -3795,37 +4055,45 @@ function Textbox:_draw(win, x, y, w)
 	local fill = (hover or focused) and th.ElementHover or th.Element
 	win:_box(x, boxY, w, boxH, fill, focused and th.Accent or fill, 10, 4)
 
-	local inner = w - 16
-	local textY = boxY + (boxH - SMALL) / 2 - 1
-	if self.Value == "" and not focused then
-		win:_text(fitText(self.Placeholder, inner, SMALL), x + 7, textY, th.TextMuted, SMALL, 12)
-	else
-		-- show the end of the text while typing so the caret stays visible
-		-- Drawing text can't be clipped, so only show what fits (with slack for wide letters)
-		local shown = self.Value
-		local room = inner - 6
-		if textWidth(shown, SMALL) * FIT_MARGIN > room then
-			if focused then
-				-- keep the end visible while typing
-				local keep = #shown
-				while keep > 0 and textWidth("..." .. shown:sub(-keep), SMALL) * FIT_MARGIN > room do
-					keep = keep - 1
-				end
-				shown = "..." .. shown:sub(-math.max(keep, 0))
-			else
-				shown = fitText(shown, room, SMALL)
-			end
+	if value == "" and not focused then
+		win:_text(fitText(self.Placeholder, inner, SMALL), textX, textY, th.TextMuted, SMALL, 12)
+		return
+	end
+	local shown = focused and value:sub(first + 1, last) or fitText(value, inner - 6, SMALL)
+	local drawn = win:_text(shown, textX, textY, th.Text, SMALL, 12)
+	-- how wide that text really is, when the executor tells us (TextBounds); used from the next frame on
+	if drawn and shown ~= "" then
+		local ok, bounds = pcall(function()
+			return drawn.TextBounds
+		end)
+		local real = ok and type(bounds) ~= "number" and bounds and bounds.X
+		local est = textWidth(shown, SMALL)
+		if type(real) == "number" and real > 0 and est > 0 then
+			self._scale = math.max(0.6, math.min(1.4, real / est))
 		end
-		win:_text(shown, x + 7, textY, th.Text, SMALL, 12)
-		if focused and (os.clock() % 1) < 0.55 then
-			local cx = x + 7 + textWidth(shown, SMALL) + 1
-			win:_rect(cx, boxY + 4, 1, boxH - 8, th.Accent, 13)
+	end
+	if not focused then
+		return
+	end
+
+	local a, b = self:_selection()
+	if a then
+		local sx1, sx2 = caretX(a), caretX(b)
+		if sx2 > sx1 then
+			win:_rect(sx1, boxY + 4, sx2 - sx1, boxH - 8, th.Accent, 11, 2, 0.35)
 		end
+	end
+	-- solid right after typing / moving, blinking otherwise
+	local sinceTyping = now() - (self._typedAt or 0)
+	if sinceTyping < 0.5 or (os.clock() % 1) < 0.55 then
+		win:_rect(caretX(self._caret), boxY + 4, 1, boxH - 8, th.Accent, 13)
 	end
 end
 
 function Textbox:Set(text, silent)
 	self.Value = tostring(text or "")
+	self._caret = math.min(self._caret or 0, #self.Value)
+	self._anchor = nil
 	self.Section:_setFlag(self.Flag, self:Get())
 	if not silent then
 		runCallback(self.Callback, self:Get(), true)
@@ -4374,18 +4642,13 @@ Library.CharacterFolders = { "Characters", "Alive", "Live", "Entities" }
 
 -- Games whose character models aren't named after the player can tell the tracker how to find them:
 --   Library.LocalCharacter = function() return yourModel end
---   Library.ListCharacters = function() return { { Name = "label", Model = model }, ... } end  -- everyone else
--- Without them it goes by usernames (LocalPlayer.Character, CharacterFolders, workspace.<name>).
+--   Library.ListCharacters = function() return { { Name = "label", Model = model }, ... } end  -- other players
+--   Library.ListNPCs = function() return { { Name = "label", Model = model }, ... } end        -- NPCs
+-- Without them it goes by usernames (LocalPlayer.Character, CharacterFolders, workspace.<name>), and NPCs
+-- are whatever in the CharacterFolders isn't a player.
 
--- other characters as { Name, Model } with unique names ("Player", "Player (2)", ...)
-local function listedCharacters()
-	if type(Library.ListCharacters) ~= "function" then
-		return nil
-	end
-	local ok, list = pcall(Library.ListCharacters)
-	if not ok or type(list) ~= "table" then
-		return {}
-	end
+-- { Name, Model } list with unique names ("Player", "Player (2)", ...)
+local function uniqueNames(list)
 	local out, count = {}, {}
 	for _, c in ipairs(list) do
 		if type(c) == "table" and c.Model then
@@ -4395,6 +4658,41 @@ local function listedCharacters()
 		end
 	end
 	return out
+end
+
+local function listedFrom(fn)
+	if type(fn) ~= "function" then
+		return nil
+	end
+	local ok, list = pcall(fn)
+	return uniqueNames(ok and type(list) == "table" and list or {})
+end
+
+-- other players from the game's own list (nil when the script didn't set Library.ListCharacters)
+local function listedCharacters()
+	return listedFrom(Library.ListCharacters)
+end
+
+-- NPCs: Library.ListNPCs, or everything in the CharacterFolders that isn't a player
+local function listedNPCs()
+	local custom = listedFrom(Library.ListNPCs)
+	if custom then
+		return custom
+	end
+	local list = {}
+	for _, folderName in ipairs(Library.CharacterFolders or {}) do
+		local folder = child(workspace, folderName)
+		local ok, kids = pcall(function()
+			return folder and folder:GetChildren() or {}
+		end)
+		for _, model in ipairs(ok and kids or {}) do
+			local name = prop(model, "Name")
+			if name and not child(Players, name) and hasHumanoid(model) then
+				list[#list + 1] = { Name = name, Model = model }
+			end
+		end
+	end
+	return uniqueNames(list)
 end
 
 local function localCharacter()
@@ -4535,24 +4833,6 @@ local function rootPart(model)
 	return child(model, "HumanoidRootPart") or child(model, "Head") or prop(model, "PrimaryPart")
 end
 
-local function copyText(text)
-	for _, name in ipairs({ "setclipboard", "toclipboard", "set_clipboard", "writeclipboard" }) do
-		local fn = rawget(_G, name)
-		if type(fn) ~= "function" and type(getgenv) == "function" then
-			fn = rawget(getgenv(), name)
-		end
-		if type(fn) ~= "function" and type(getfenv) == "function" then
-			local ok, env = pcall(getfenv, 0)
-			if ok and type(env) == "table" then
-				fn = rawget(env, name)
-			end
-		end
-		if type(fn) == "function" and pcall(fn, text) then
-			return true
-		end
-	end
-	return false
-end
 
 function Window:OpenAnimationTracker()
 	if self._tracker and self._tracker.Running then
@@ -4586,7 +4866,7 @@ function Window:OpenAnimationTracker()
 	local animSec = tab:CreateSection({ Name = "Animations" })
 
 	local state = { targets = {}, history = {}, printing = false, esp = true, espRate = 240, smoothing = 0.03 }
-	local typeDd, playerDd, pathBox, refreshBtn, trackToggle, list
+	local typeDd, playerDd, npcDd, pathBox, refreshBtn, trackToggle, list
 
 	local function playerNames()
 		local names = {}
@@ -4615,29 +4895,65 @@ function Window:OpenAnimationTracker()
 		return names
 	end
 
+	local function npcNames()
+		local names = {}
+		for _, c in ipairs(listedNPCs()) do
+			names[#names + 1] = c.Name
+		end
+		table.sort(names, function(a, b)
+			return a:lower() < b:lower()
+		end)
+		return names
+	end
+
 	local function updateVisibility()
 		local kind = typeDd:Get()
 		playerDd:SetVisible(kind == "Player")
-		refreshBtn:SetVisible(kind == "Player")
+		npcDd:SetVisible(kind == "NPC")
+		refreshBtn:SetVisible(kind == "Player" or kind == "NPC")
 		pathBox:SetVisible(kind == "Path")
 	end
 
 	typeDd = targetSec:AddDropdown({
 		Name = "Target Type",
-		Options = { "LocalPlayer", "Player", "Path" },
+		Options = { "LocalPlayer", "Player", "NPC", "Path" },
 		Default = "LocalPlayer",
 		Callback = function()
 			updateVisibility()
 		end,
 	})
 	playerDd = targetSec:AddDropdown({ Name = "Player", Options = playerNames() })
+	npcDd = targetSec:AddDropdown({ Name = "NPC", Options = npcNames() })
 	refreshBtn = targetSec:AddButton({
-		Name = "Refresh Players",
+		Name = "Refresh Lists",
 		Callback = function()
 			playerDd:Refresh(playerNames(), true)
+			npcDd:Refresh(npcNames(), true)
 		end,
 	})
-	pathBox = targetSec:AddTextbox({ Name = "Path", Placeholder = "Characters/NpcName" })
+	pathBox = targetSec:AddTextbox({ Name = "Path", Placeholder = "Alive/NpcName" })
+
+	-- watches the model picked from a list; looks it up by name again if it's replaced (respawn)
+	local function followListed(name, lister)
+		local picked
+		for _, c in ipairs(lister() or {}) do
+			if c.Name == name then
+				picked = c.Model
+			end
+		end
+		return function()
+			if picked and prop(picked, "Parent") ~= nil then
+				return picked
+			end
+			for _, c in ipairs(lister() or {}) do
+				if c.Name == name then
+					picked = c.Model
+					return picked
+				end
+			end
+			return nil
+		end
+	end
 
 	-- who to watch right now: returns a function that finds the model again (respawns)
 	local function resolver()
@@ -4651,35 +4967,24 @@ function Window:OpenAnimationTracker()
 				return nil
 			end
 			if listedCharacters() then
-				-- picked from the game's list: keep watching that model, look it up by name if it's replaced
-				local picked
-				for _, c in ipairs(listedCharacters()) do
-					if c.Name == name then
-						picked = c.Model
-					end
-				end
-				return name, function()
-					if picked and prop(picked, "Parent") ~= nil then
-						return picked
-					end
-					for _, c in ipairs(listedCharacters() or {}) do
-						if c.Name == name then
-							picked = c.Model
-							return picked
-						end
-					end
-					return nil
-				end
+				return name, followListed(name, listedCharacters)
 			end
 			return name, function()
 				return Library.FindCharacter(name)
 			end
+		elseif kind == "NPC" then
+			local name = npcDd:Get()
+			if not name then
+				return nil
+			end
+			return name, followListed(name, listedNPCs)
 		end
 		local path = pathBox:Get()
 		if path == "" then
 			return nil
 		end
-		return path:match("([^/%.]+)$") or path, function()
+		-- label: the last part after a "/" ("Lesser Skeleton.7" keeps its dot)
+		return path:match("([^/]+)$") or path, function()
 			return Library.FindByPath(path)
 		end
 	end
