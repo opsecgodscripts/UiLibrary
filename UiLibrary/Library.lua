@@ -12,8 +12,9 @@
 	  ))()
 
 	WINDOW
-	  Library:CreateWindow({ Title, Subtitle, Logo, ToggleKey, Theme, Font, Size, Folder, MaxFps,
+	  Library:CreateWindow({ Title, Subtitle, Version, Logo, ToggleKey, Theme, Font, Size, Folder, MaxFps,
 	                         AutoSave, UniversalTab, OnUnload })                      -> Window
+	    Version    text shown bottom-right of the footer, e.g. "v1.0.0" (a "v" is added if missing)
 	    Logo       link to a PNG / JPG / WebP, drawn 20 x 20 in the top-left
 	    ToggleKey  "RightShift", "Insert", "F1", "K" ... a virtual-key number (0xA1) or an Enum.KeyCode
 	    Theme      "Default", "Tung", "Dark", "Light", "Midnight", "Ocean", "Forest", "Amethyst",
@@ -26,6 +27,7 @@
 	  Window:CreateTab({ Name, Icon })         Window:SelectTab(tab)     Window:Toggle([visible])
 	  Window:Notify(title, text, duration)     Window:SetStatus(text, connected)
 	  Window:SetTitle(title, subtitle)         Window:SetTheme(name | table)   Window:SetFont(name)
+	  Window:SetVersion(text)
 	  Window:SetToggleKey(key)                 Window:SetFpsCap(number | nil)
 	  Window:OnDestroy(fn)                     -- runs on Unload and when the script is run again
 	  Window:Destroy()                         Window.Flags[flag] -- current value of every flagged element
@@ -1232,6 +1234,7 @@ function Library:CreateWindow(config)
 	local self = setmetatable({
 		Title = config.Title or "UiLibrary",
 		Subtitle = config.Subtitle or "",
+		Version = "",
 		Theme = theme,
 		Flags = {},
 		Visible = true,
@@ -1321,6 +1324,9 @@ function Library:CreateWindow(config)
 			self._saved = {}
 		end
 		self:_applySavedLook()
+	end
+	if config.Version then
+		self:SetVersion(config.Version)
 	end
 
 	if config.Logo then
@@ -2251,7 +2257,13 @@ function Window:_drawWindow()
 	self:_rect(x, fy, W, FOOTER, th.Footer, 2, 4)
 	self:_rect(x, fy, W, 4, th.Footer, 2)
 	self:_circle(x + 12, fy + FOOTER / 2, 3, self._statusGood and th.Good or th.Bad, 5)
-	self:_text(fitText(self._status, W - 34, SMALL), x + 21, fy + (FOOTER - SMALL) / 2 - 1, th.Text, SMALL, 5)
+	local verW = 0
+	if self.Version ~= "" then
+		local ver = fitText(self.Version, W * 0.35, SMALL)
+		verW = textWidth(ver, SMALL) + 12
+		self:_text(ver, x + W - 9, fy + (FOOTER - SMALL) / 2 - 1, th.TextDim, SMALL, 5, "right")
+	end
+	self:_text(fitText(self._status, W - 34 - verW, SMALL), x + 21, fy + (FOOTER - SMALL) / 2 - 1, th.Text, SMALL, 5)
 
 	-- swallow clicks on the window background so they don't fall through to other logic
 	self:_clickIn(x, y, W, H)
@@ -2730,6 +2742,12 @@ end
 function Window:SetStatus(text, connected)
 	self._status = tostring(text or "")
 	self._statusGood = connected == true
+end
+
+function Window:SetVersion(text)
+	text = tostring(text or "")
+	if text ~= "" and not text:match("^[vV]") and text:match("^%d") then text = "v" .. text end
+	self.Version = text
 end
 
 function Window:SetTitle(title, subtitle)
