@@ -1275,6 +1275,7 @@ function Library:CreateWindow(config)
 		if type(self._saved) ~= "table" then
 			self._saved = {}
 		end
+		self:_applySavedLook()
 	end
 
 	if config.Logo then
@@ -2612,6 +2613,29 @@ function Window:SetTheme(theme)
 	end
 	for k, v in pairs(new) do
 		self.Theme[k] = v
+	end
+end
+
+-- Theme, font, menu key and FPS cap from the last run go on before the first frame. (Everything else is
+-- restored as the script creates its elements, but these belong to the UI tab, and waiting for that made
+-- the window show up in the default look first.)
+function Window:_applySavedLook()
+	local saved = self._saved or {}
+	if type(saved.UI_Theme) == "string" and Library.Themes[saved.UI_Theme] then
+		self:SetTheme(saved.UI_Theme)
+		self._startTheme = saved.UI_Theme
+	end
+	if type(saved.UI_Font) == "string" and FontIds[saved.UI_Font] then
+		self:SetFont(saved.UI_Font)
+	end
+	if type(saved.UI_MenuKey) == "string" and saved.UI_MenuKey ~= "None" then
+		local key = resolveOptionalKey(saved.UI_MenuKey)
+		if key then
+			self._toggleKey = key
+		end
+	end
+	if tonumber(saved.UI_FpsCap) then -- "Unlimited" leaves the game's cap alone
+		self:SetFpsCap(tonumber(saved.UI_FpsCap))
 	end
 end
 
@@ -4036,7 +4060,7 @@ function Window:_buildUniversalTab(opts, windowConfig)
 		end
 		return a < b
 	end)
-	local startTheme = type(windowConfig.Theme) == "string" and windowConfig.Theme or "Default"
+	local startTheme = window._startTheme or (type(windowConfig.Theme) == "string" and windowConfig.Theme) or "Default"
 	interface:AddDropdown({
 		Name = "Theme",
 		Options = themeNames,
